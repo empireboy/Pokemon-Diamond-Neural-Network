@@ -25,14 +25,15 @@ previousPlayerPositionY = 0
 playerRotation = 0
 playerWalkingTowardsTileType = 0
 playerTileType = 0
-playerMoveGrid = {}
-playerStuckPositionX = 0
-playerStuckPositionY = 0
-playerStuckDistance = 3
-playerStuckCurrentCount = 0
-playerStuckMaxCount = 10
+playerRepetitiveStuckPositionX = 0
+playerRepetitiveStuckPositionY = 0
+playerRepetitiveStuckDistance = 3
+playerRepetitiveStuckCurrentCount = 0
+playerRepetitiveStuckMaxCount = 10
 
-stuckTime = 40
+worldGrid = {}
+
+stuckTime = 200
 stuckTimer = 0
 
 bestFitness = 0
@@ -49,11 +50,15 @@ inputScannerString = ""
 inputScannerBorderString = "---------------------"
 inputScannerIndex = 1
 
-programLoop = false
+trainingLoop = false
 
 replayAfterEvolution = false
 
 --print(joypad.getimmediate())
+
+function drawTrainingUI()
+	
+end
 
 function drawInputScanner(input)
 	inputScannerString = ""
@@ -73,22 +78,30 @@ function drawInputScanner(input)
 	print(inputScannerBorderString)
 end
 
-function drawCurrentNeuralNetwork()
-	for i = 1, #(neuralNetworks[neuralNetworkIndex].neurons) do
-		for j = 1, #(neuralNetworks[neuralNetworkIndex].neurons[i]) do
-			color = "Red"
-			positionX = 5
-			positionY = 125
-			offsetX = client.borderwidth() / 4
+function drawNeuralNetwork(neuralNetwork, positionX, positionY, negativeColor, positiveColor)
+	positionX = positionX or 5
+	positionY = positionY or 125
+	negativeColor = negativeColor or "Red"
+	positiveColor = positiveColor or "Green"
+
+	local color, offsetX, offsetY
+
+	for i = 1, #(neuralNetwork.neurons) do
+		for j = 1, #(neuralNetwork.neurons[i]) do
+			offsetX = (client.borderwidth() + 250) / #(neuralNetwork.neurons) / 2.1
 			offsetY = (client.screenheight() - 150) / #(neuralNetworks[neuralNetworkIndex].neurons[i])
 
+			local neuronValue = neuralNetworks[neuralNetworkIndex].neurons[i][j]
+
 			if
-				(neuralNetworks[neuralNetworkIndex].neurons[i][j] == 1 and i == 1) or
-				(neuralNetworks[neuralNetworkIndex].neurons[i][j] > 0 and i ~= 1)
+				(neuronValue == 1 and i == 1) or
+				(neuronValue > 0 and i ~= 1)
 			then
-				color = "Green"		-- Active color
-			elseif neuralNetworks[neuralNetworkIndex].neurons[i][j] == 2 and i == 1 then
-				color = "White"		-- Wall color
+				color = positiveColor
+			elseif neuronValue == 2 and i == 1 then
+				color = "White"
+			else
+				color = negativeColor
 			end
 
 			gui.drawRectangle(positionX + offsetX * (i - 1), positionY + offsetY * (j - 1), 10, 1, color, color)
@@ -96,7 +109,11 @@ function drawCurrentNeuralNetwork()
 	end
 end
 
-function ManhattanDistance(x1, y1, x2, y2)
+function drawCurrentNeuralNetwork()
+	drawNeuralNetwork(neuralNetworks[neuralNetworkIndex])
+end
+
+function manhattanDistance(x1, y1, x2, y2)
 	return math.abs(x1 - x2) + math.abs(y1 - y2)
 end
 
@@ -134,11 +151,11 @@ function fileExists(fileName)
 	return saveFile ~= nil
 end
 
-function inGridRange(x, y, width, height)
+function isInGridRange(x, y, width, height)
 	if 
-		x >= 0 and
+		x >= 1 and
 		x <= width and
-		y >= 0 and
+		y >= 1 and
 		y <= height
 	then
 		return true
@@ -147,8 +164,12 @@ function inGridRange(x, y, width, height)
 	return false
 end
 
-function inPlayerGridRange(x, y)
-	return inGridRange(x, y, #(playerMoveGrid), #(playerMoveGrid[1]))
+function isInWorldGridRange(x, y)
+	return isInGridRange(x, y, #(worldGrid), #(worldGrid[1]))
+end
+
+function isPlayerInGridRange()
+	return isInWorldGridRange(playerPositionX, playerPositionY)
 end
 
 function readFromMemory()
@@ -175,12 +196,12 @@ function playerMovedOneStep()
 	return playerPositionX ~= previousPlayerPositionX or playerPositionY ~= previousPlayerPositionY
 end
 
-function initPlayerMoveGrid()
+function initworldGrid()
 	for i = 1, playerPositionX * 2 + 1 do
-		playerMoveGrid[i] = {}
+		worldGrid[i] = {}
 
 		for j = 1, playerPositionY * 2 + 1 do
-			playerMoveGrid[i][j] = 0
+			worldGrid[i][j] = 0
 		end
 	end
 end
@@ -189,6 +210,86 @@ function replay()
 	replayAfterEvolution = true
 
 	print("Replay will show after next evolution")
+end
+
+function initTrainingLoop()
+	gui.clearGraphics()
+
+	readFromMemory()
+
+	-- Start of run initialization
+	if runTimer == 0 then
+		-- Reset previous player position if a new run started
+		previousPlayerPositionX = playerPositionX
+		previousPlayerPositionY = playerPositionY
+
+		playerRepetitiveStuckPositionX = playerPositionX
+		playerRepetitiveStuckPositionY = playerPositionY
+
+		-- Start position is explored
+		worldGrid[playerPositionX][playerPositionY] = 1
+	end
+end
+
+function trainingLoopPlayerMoved()
+	-- Player moved one step
+	if playerMovedOneStep() then
+		updatePlayerRepetitiveStuck()
+
+		updatePlayerMovementFitness()
+
+		stuckTimer = 0
+	end
+end
+
+function updatePlayerRepetitiveStuck()
+	-- If player stays within a small distance go next run
+	if playerRepetitiveStuckCurrentCount >= playerRepetitiveStuckMaxCount then
+		if manhattanDistance(playerPositionX, playerPositionY, playerRepetitiveStuckPositionX, playerRepetitiveStuckPositionY) <= playerRepetitiveStuckDistance then
+			nextRun()
+		else
+			playerRepetitiveStuckPositionX = playerPositionX
+			playerRepetitiveStuckPositionY = playerPositionY
+			playerRepetitiveStuckCurrentCount = 0
+		end
+	end
+
+	playerRepetitiveStuckCurrentCount = playerRepetitiveStuckCurrentCount + 1
+end
+
+function updatePlayerMovementFitness()
+	fitnessSpeed = (stuckTime - stuckTimer) * 0.00001
+
+	-- If player moved to a new grid tile, add fitness
+	if isPlayerInGridRange() then
+		if worldGrid[playerPositionX][playerPositionY] == 0 then
+			worldGrid[playerPositionX][playerPositionY] = 1
+			fitnessPlayerMoving = fitnessPlayerMoving + 0.0001 + fitnessSpeed
+		end
+	end
+end
+
+function updateWorldGrid()
+	-- Remove wall from grid if player hits a wall
+	if playerWalkingTowardsTileType == 2 then
+		if playerRotation == 0 then
+			if isInWorldGridRange(playerPositionX, playerPositionY - 1) then
+				worldGrid[playerPositionX][playerPositionY - 1] = 2
+			end
+		elseif playerRotation == 1 then
+			if isInWorldGridRange(playerPositionX, playerPositionY + 1) then
+				worldGrid[playerPositionX][playerPositionY + 1] = 2
+			end
+		elseif playerRotation == 2 then
+			if isInWorldGridRange(playerPositionX - 1, playerPositionY) then
+				worldGrid[playerPositionX - 1][playerPositionY] = 2
+			end
+		elseif playerRotation == 3 then
+			if isInWorldGridRange(playerPositionX + 1, playerPositionY) then
+				worldGrid[playerPositionX + 1][playerPositionY] = 2
+			end
+		end
+	end
 end
 
 function getNeuralNetworkInputFromGrid(width, height)
@@ -200,13 +301,8 @@ function getNeuralNetworkInputFromGrid(width, height)
 			gridIndexX = playerPositionX - math.floor(width / 2) + i
 			gridIndexY = playerPositionY - math.floor(height / 2) + j
 
-			if 
-				gridIndexX >= 0 and
-				gridIndexX <= #(playerMoveGrid) and
-				gridIndexY >= 0 and
-				gridIndexY <= #(playerMoveGrid[1])
-			then
-				input[inputIndex] = playerMoveGrid[gridIndexX][gridIndexY]
+			if isInWorldGridRange(gridIndexX, gridIndexY) then
+				input[inputIndex] = worldGrid[gridIndexX][gridIndexY]
 			else
 				input[inputIndex] = 1
 			end
@@ -345,21 +441,21 @@ function nextRun()
 	fitnessPlayerExploration = 0
 	fitnessMoveInput = 0
 	
-	playerStuckCurrentCount = 0
+	playerRepetitiveStuckCurrentCount = 0
 
 	neuralNetworkIndex = neuralNetworkIndex + 1
 	stuckTimer = 0
 	runTimer = 0
 	input = {}
 	
-	initPlayerMoveGrid()
+	initworldGrid()
 
 	-- Only remove places walked from grid, but keep walls etc
 	--[[
-	for i = 1, #(playerMoveGrid) do
-		for j = 1, #(playerMoveGrid[i]) do
-			if playerMoveGrid[i][j] == 1 then
-				playerMoveGrid[i][j] = 0
+	for i = 1, #(worldGrid) do
+		for j = 1, #(worldGrid[i]) do
+			if worldGrid[i][j] == 1 then
+				worldGrid[i][j] = 0
 			end
 		end
 	end
@@ -438,6 +534,12 @@ function mutateWithPercentage(percentage)
 			neuralNetworks[i - averageNeuralNetworkCount]:copyPercentage(neuralNetworks[i], percentage)
 		end
 	end
+end
+
+function onExit()
+	gui.clearGraphics()
+
+	client.SetClientExtraPadding(0, 0, 0, 0)
 end
 
 function NeuralNetwork:new(layers)
@@ -759,10 +861,14 @@ function NeuralNetwork:printWeights()
 	end
 end
 
-function initializeProgram()
+function runTraining()
 	math.randomseed(os.time())
 
+	event.onexit(onExit)
+
 	console.clear()
+
+	client.SetClientExtraPadding(250, 0, 0, 0)
 
 	memory.usememorydomain("Main RAM")
 
@@ -773,14 +879,14 @@ function initializeProgram()
 
 	readFromMemory()
 
-	initPlayerMoveGrid()
+	initworldGrid()
 
 	previousPlayerPositionX = playerPositionX
 	previousPlayerPositionY = playerPositionY
 
 
 	for i = 1, neuralNetworkCount do
-		neuralNetworks[i] = NeuralNetwork:new({15*15, 15*15/3*2, 5})
+		neuralNetworks[i] = NeuralNetwork:new({15*15, 15*15/3*2, 10, 5})
 
 		if fileExists(saveFileName) then
 			neuralNetworks[i]:load(saveFileName)
@@ -793,166 +899,106 @@ function initializeProgram()
 		mutateAll()
 	end
 
-	programLoop = true
+	trainingLoop()
+end
+
+function trainingLoop()
+	while true do
+		initTrainingLoop()
+
+		trainingLoopPlayerMoved()
+
+		updateWorldGrid()
+
+		input = getNeuralNetworkInputFromGrid(15, 15)
+
+		-- Input Scanner Visual
+		--drawInputScanner(input)
+
+		output = neuralNetworks[neuralNetworkIndex]:feedForward(input)
+
+		joypadTable = {
+			Right = output[1] > 0,
+			Left = output[2] > 0,
+			Up = output[3] > 0,
+			Down = output[4] > 0,
+			B = output[5] > 0
+		}
+
+		drawTrainingUI()
+	
+		gui.text(5, 5 + 20 * 0, "Best Fitness: " .. bestFitness)
+		gui.text(5, 5 + 20 * 1, "Best Run: " .. bestRun)
+		gui.text(5, 5 + 20 * 3, "Current Run: " .. totalRuns + 1)
+		gui.text(5, 5 + 20 * 4, "Current Evolution: " .. evolution)
+
+		-- Draw replay text
+		if neuralNetworkIndex <= goodNeuralNetworkCount and runTimer <= 150 then
+			gui.drawText(client.screenwidth() / 2 + 150, client.screenheight() / 2, "Replay #" .. neuralNetworkIndex, nil, nil, (client.screenwidth() + 250 - client.borderwidth() * 2) / 8, nil, "bold", "center", "center")
+		end
+
+		-- Player exploration fitness
+		--[[
+		if playerMovedOneStep() then
+			for i = 1, #(input) do
+				if input[i] > 0 then
+					fitnessPlayerExploration = fitnessPlayerExploration + 0.0001
+				end
+			end
+		end
+		--]]
+
+		--[[
+		if output[1] > 0 then
+			--fitnessMoveInput = fitnessMoveInput - 0.00001 * runTimer
+		else
+			fitnessMoveInput = fitnessMoveInput + math.min(0.000001 * runTimer, 0.0001)
+		end
+
+		if output[2] > 0 then
+			--fitnessMoveInput = fitnessMoveInput - 0.00001 * runTimer
+		else
+			fitnessMoveInput = fitnessMoveInput + math.min(0.000001 * runTimer, 0.0001)
+		end
+
+		if output[3] > 0 then
+			--fitnessMoveInput = fitnessMoveInput - 0.00001 * runTimer
+		else
+			fitnessMoveInput = fitnessMoveInput + math.min(0.000001 * runTimer, 0.0001)
+		end
+
+		if output[4] > 0 then
+			--fitnessMoveInput = fitnessMoveInput - 0.00001 * runTimer
+		else
+			fitnessMoveInput = fitnessMoveInput + math.min(0.000001 * runTimer, 0.0001)
+		end
+		--]]
+
+		--joypad.set(joypadTable)
+
+		-- Draw Neural Network
+		drawCurrentNeuralNetwork()
+
+		runTimer = runTimer + 1
+
+		if runTimer >= runTime then
+			nextRun()
+		end
+
+		stuckTimer = stuckTimer + 1
+
+		if stuckTimer >= stuckTime then
+			nextRun()
+		end
+
+		emu.frameadvance()
+
+		previousPlayerPositionX = playerPositionX
+		previousPlayerPositionY = playerPositionY
+	end
 end
 
 -- START PROGRAM
-initializeProgram()
+runTraining()
 
 --increaseNeuralNetwork(saveFileName)
-
-while programLoop do
-	gui.clearGraphics()
-
-	readFromMemory()
-
-	-- Start of run initialization
-	if runTimer == 0 then
-		-- Reset previous player position if a new run started
-		previousPlayerPositionX = playerPositionX
-		previousPlayerPositionY = playerPositionY
-
-		playerStuckPositionX = playerPositionX
-		playerStuckPositionY = playerPositionY
-
-		-- Start position is explored
-		playerMoveGrid[playerPositionX][playerPositionY] = 1
-	end
-
-	-- Player moved one step
-	if playerMovedOneStep() then
-		-- If player stays within a small distance go next run
-		if playerStuckCurrentCount >= playerStuckMaxCount then
-			if ManhattanDistance(playerPositionX, playerPositionY, playerStuckPositionX, playerStuckPositionY) <= playerStuckDistance then
-				nextRun()
-			else
-				playerStuckPositionX = playerPositionX
-				playerStuckPositionY = playerPositionY
-				playerStuckCurrentCount = 0
-			end
-		end
-
-		playerStuckCurrentCount = playerStuckCurrentCount + 1
-
-		fitnessSpeed = (stuckTime - stuckTimer) * 0.00001
-
-		-- If player moved to a new grid tile, add fitness
-		if inPlayerGridRange(playerPositionX, playerPositionY) then
-			if playerMoveGrid[playerPositionX][playerPositionY] == 0 then
-				playerMoveGrid[playerPositionX][playerPositionY] = 1
-				fitnessPlayerMoving = fitnessPlayerMoving + 0.0001 + fitnessSpeed
-			end
-		end
-
-		stuckTimer = 0
-	end
-
-	-- Remove wall from grid if player hits a wall
-	if playerWalkingTowardsTileType == 2 then
-		if playerRotation == 0 then
-			if inPlayerGridRange(playerPositionX, playerPositionY - 1) then
-				playerMoveGrid[playerPositionX][playerPositionY - 1] = 2
-			end
-		elseif playerRotation == 1 then
-			if inPlayerGridRange(playerPositionX, playerPositionY + 1) then
-				playerMoveGrid[playerPositionX][playerPositionY + 1] = 2
-			end
-		elseif playerRotation == 2 then
-			if inPlayerGridRange(playerPositionX - 1, playerPositionY) then
-				playerMoveGrid[playerPositionX - 1][playerPositionY] = 2
-			end
-		elseif playerRotation == 3 then
-			if inPlayerGridRange(playerPositionX + 1, playerPositionY) then
-				playerMoveGrid[playerPositionX + 1][playerPositionY] = 2
-			end
-		end
-	end
-
-	input = getNeuralNetworkInputFromGrid(15, 15)
-
-	-- Input Scanner Visual
-	--drawInputScanner(input)
-
-	output = neuralNetworks[neuralNetworkIndex]:feedForward(input)
-
-	joypadTable = {
-		Right = output[1] > 0,
-		Left = output[2] > 0,
-		Up = output[3] > 0,
-		Down = output[4] > 0,
-		B = output[5] > 0
-	}
-	
-	gui.text(5, 5 + 20 * 0, "Best Fitness: " .. bestFitness)
-	gui.text(5, 5 + 20 * 1, "Best Run: " .. bestRun)
-	gui.text(5, 5 + 20 * 3, "Current Run: " .. totalRuns + 1)
-	gui.text(5, 5 + 20 * 4, "Current Evolution: " .. evolution)
-
-	-- Draw replay text
-	if neuralNetworkIndex <= goodNeuralNetworkCount and runTimer <= 150 then
-		gui.drawText(client.screenwidth() / 2, client.screenheight() / 2, "Replay #" .. neuralNetworkIndex, nil, nil, 100, nil, "bold", "center", "center")
-	end
-
-	-- Player exploration fitness
-	--[[
-	if playerMovedOneStep() then
-		for i = 1, #(input) do
-			if input[i] > 0 then
-				fitnessPlayerExploration = fitnessPlayerExploration + 0.0001
-			end
-		end
-	end
-	--]]
-
-	--[[
-	if output[1] > 0 then
-		--fitnessMoveInput = fitnessMoveInput - 0.00001 * runTimer
-	else
-		fitnessMoveInput = fitnessMoveInput + math.min(0.000001 * runTimer, 0.0001)
-	end
-
-	if output[2] > 0 then
-		--fitnessMoveInput = fitnessMoveInput - 0.00001 * runTimer
-	else
-		fitnessMoveInput = fitnessMoveInput + math.min(0.000001 * runTimer, 0.0001)
-	end
-
-	if output[3] > 0 then
-		--fitnessMoveInput = fitnessMoveInput - 0.00001 * runTimer
-	else
-		fitnessMoveInput = fitnessMoveInput + math.min(0.000001 * runTimer, 0.0001)
-	end
-
-	if output[4] > 0 then
-		--fitnessMoveInput = fitnessMoveInput - 0.00001 * runTimer
-	else
-		fitnessMoveInput = fitnessMoveInput + math.min(0.000001 * runTimer, 0.0001)
-	end
-	--]]
-
-	joypad.set(joypadTable)
-
-	-- Draw Neural Network
-	--drawCurrentNeuralNetwork()
-
-	runTimer = runTimer + 1
-
-	if runTimer >= runTime then
-		nextRun()
-	end
-
-	stuckTimer = stuckTimer + 1
-
-	if stuckTimer >= stuckTime then
-		nextRun()
-	end
-
-	emu.frameadvance()
-
-	previousPlayerPositionX = playerPositionX
-	previousPlayerPositionY = playerPositionY
-end
-
--- Back propegation outputs berekenen door random outputs in te vullen en daarmee te kijken of de fitness score hoger wordt
--- Die outputs gebruiken voor back propegation
--- Misschien alle mogelijke outputs uitproberen en de beste te selecteren
