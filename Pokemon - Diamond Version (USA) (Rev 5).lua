@@ -1,6 +1,7 @@
 NeuralNetwork = {}
 
 neuralNetworks = {}
+neuralNetworkLayers = {10*10, 60, 60, 5}
 neuralNetworkIndex = 1
 neuralNetworkCount = 20
 goodNeuralNetworkCount = 5
@@ -33,7 +34,7 @@ playerRepetitiveStuckMaxCount = 10
 
 worldGrid = {}
 
-stuckTime = 200
+stuckTime = 80
 stuckTimer = 0
 
 bestFitness = 0
@@ -53,11 +54,36 @@ inputScannerIndex = 1
 trainingLoop = false
 
 replayAfterEvolution = false
+replayTime = 150
+replayFormat = "Replay #%s"
+
+extraBorderWidth = 250
+
+trainingTextPositionX = 5
+trainingTextPositionY = 5
+trainingTextOffsetY = 20
 
 --print(joypad.getimmediate())
 
 function drawTrainingUI()
-	
+	drawTrainingText(trainingTextPositionX, trainingTextPositionY, trainingTextOffsetY)
+
+	drawReplayText(neuralNetworkIndex)
+end
+
+function drawTrainingText(positionX, positionY, offsetY)
+	gui.text(positionX, positionY + offsetY * 0, "Best Fitness: " .. bestFitness)
+	gui.text(positionX, positionY + offsetY * 1, "Best Run: " .. bestRun)
+	gui.text(positionX, positionY + offsetY * 3, "Current Run: " .. totalRuns + 1)
+	gui.text(positionX, positionY + offsetY * 4, "Current Evolution: " .. evolution)
+end
+
+function drawReplayText(neuralNetworkIndex)
+	local replayText = string.format(replayFormat, neuralNetworkIndex)
+
+	if neuralNetworkIndex <= goodNeuralNetworkCount and runTimer <= replayTime then
+		gui.drawText(gameCenterX(), gameCenterY(), replayText, nil, nil, (client.screenwidth() + 250 - client.borderwidth() * 2) / 8, nil, "bold", "center", "center")
+	end
 end
 
 function drawInputScanner(input)
@@ -212,6 +238,14 @@ function replay()
 	print("Replay will show after next evolution")
 end
 
+function gameCenterX()
+	return (client.screenwidth() + extraBorderWidth) / 2
+end
+
+function gameCenterY()
+	return client.screenheight() / 2
+end
+
 function initTrainingLoop()
 	gui.clearGraphics()
 
@@ -314,17 +348,17 @@ function getNeuralNetworkInputFromGrid(width, height)
 	return input
 end
 
-function increaseNeuralNetwork(fileName)
-	neuralNetworkTempOld = NeuralNetwork:new({10*10, 60, 60, 5})
-	neuralNetworkTempNew = NeuralNetwork:new({10*10, 60, 60, 60, 5})
+function increaseNeuralNetwork(fileName, newNeuralNetworkLayers)
+	neuralNetworkOld = NeuralNetwork:new(neuralNetworkLayers)
+	neuralNetworkNew = NeuralNetwork:new(newNeuralNetworkLayers)
 
-	neuralNetworkTempOld:load(fileName)
+	neuralNetworkOld:load(fileName)
 
 	lines = {}
 	linesNew = {}
 	index = 1
-	biasesToAdd = arrayLength2D(neuralNetworkTempNew.biases) - arrayLength2D(neuralNetworkTempOld.biases)
-	weightsToAdd = arrayLength3D(neuralNetworkTempNew.weights) - arrayLength3D(neuralNetworkTempOld.weights)
+	biasesToAdd = arrayLength2D(neuralNetworkNew.biases) - arrayLength2D(neuralNetworkOld.biases)
+	weightsToAdd = arrayLength3D(neuralNetworkNew.weights) - arrayLength3D(neuralNetworkOld.weights)
 
 	for line in io.lines(fileName) do
 		lines[#lines + 1] = line
@@ -334,9 +368,9 @@ function increaseNeuralNetwork(fileName)
 	linesNew[index] = 0
 	index = index + 1
 
-	for i = 1, #(neuralNetworkTempOld.biases) do
-		for j = 1, #(neuralNetworkTempOld.biases[i]) do
-			linesNew[index] = neuralNetworkTempOld.biases[i][j]
+	for i = 1, #(neuralNetworkOld.biases) do
+		for j = 1, #(neuralNetworkOld.biases[i]) do
+			linesNew[index] = neuralNetworkOld.biases[i][j]
 			index = index + 1
 		end
 	end
@@ -347,10 +381,10 @@ function increaseNeuralNetwork(fileName)
 		index = index + 1
 	end
 
-	for i = 1, #(neuralNetworkTempOld.weights) do
-		for j = 1, #(neuralNetworkTempOld.weights[i]) do
-			for k = 1, #(neuralNetworkTempOld.weights[i][j]) do
-				linesNew[index] = neuralNetworkTempOld.weights[i][j][k]
+	for i = 1, #(neuralNetworkOld.weights) do
+		for j = 1, #(neuralNetworkOld.weights[i]) do
+			for k = 1, #(neuralNetworkOld.weights[i][j]) do
+				linesNew[index] = neuralNetworkOld.weights[i][j][k]
 				index = index + 1
 			end
 		end
@@ -868,7 +902,7 @@ function runTraining()
 
 	console.clear()
 
-	client.SetClientExtraPadding(250, 0, 0, 0)
+	client.SetClientExtraPadding(extraBorderWidth, 0, 0, 0)
 
 	memory.usememorydomain("Main RAM")
 
@@ -910,7 +944,7 @@ function trainingLoop()
 
 		updateWorldGrid()
 
-		input = getNeuralNetworkInputFromGrid(15, 15)
+		input = getNeuralNetworkInputFromGrid(10, 10)
 
 		-- Input Scanner Visual
 		--drawInputScanner(input)
@@ -926,16 +960,6 @@ function trainingLoop()
 		}
 
 		drawTrainingUI()
-	
-		gui.text(5, 5 + 20 * 0, "Best Fitness: " .. bestFitness)
-		gui.text(5, 5 + 20 * 1, "Best Run: " .. bestRun)
-		gui.text(5, 5 + 20 * 3, "Current Run: " .. totalRuns + 1)
-		gui.text(5, 5 + 20 * 4, "Current Evolution: " .. evolution)
-
-		-- Draw replay text
-		if neuralNetworkIndex <= goodNeuralNetworkCount and runTimer <= 150 then
-			gui.drawText(client.screenwidth() / 2 + 150, client.screenheight() / 2, "Replay #" .. neuralNetworkIndex, nil, nil, (client.screenwidth() + 250 - client.borderwidth() * 2) / 8, nil, "bold", "center", "center")
-		end
 
 		-- Player exploration fitness
 		--[[
@@ -1000,5 +1024,6 @@ end
 
 -- START PROGRAM
 runTraining()
+
 
 --increaseNeuralNetwork(saveFileName)
