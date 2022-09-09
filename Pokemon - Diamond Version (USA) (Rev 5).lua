@@ -20,7 +20,7 @@ runTime = 1000
 runTimer = 0
 evolution = 0
 
-mutationChance = 30
+mutationChance = 40
 mutationStrength = 10
 
 joypadTable = {}
@@ -50,10 +50,13 @@ isPlayerInConversation = false
 playerConversationAddress = 0x39E544
 
 worldGrid = {}
+worldGridWidth = 1000
+worldGridHeight = 1000
 worldGridCreatorTimer = 0
-worldGridCreatorX = 670
-worldGridCreatorY = 330
+worldGridCreatorX = 100
+worldGridCreatorY = 856
 worldGridCreatorIndex = 0
+worldGridSaveFileName = "World Grid.txt"
 unExploredTileInput = 0
 exploredTileInput = 1
 wallInput = 2
@@ -63,20 +66,18 @@ npcColor = "Yellow"
 grassInput = 4
 grassColor = "DarkGreen"
 
-stuckTime = 80
+stuckTime = 40
 isRunTimerActive = true
 stuckTimer = 0
 isStuckTimerActive = true
 
 bestFitness = 0
 fitnessPlayerMoving = 0
-fitnessMoveInput = 0
+fitnessPlayerSpeed = 0
 
 saveState = 5
 
 saveFileName = "Best Neural Network.txt"
-
-trainingLoop = false
 
 replayAfterEvolution = false
 replayTime = 150
@@ -95,9 +96,9 @@ function drawTrainingUI()
 
 	drawReplayText(neuralNetworkIndex)
 
-	drawCurrentNeuralNetwork()
+	--drawCurrentNeuralNetwork()
 
-	drawInputScanner(input)
+	--drawInputScanner(input)
 end
 
 function drawTrainingText(positionX, positionY, offsetY)
@@ -300,11 +301,48 @@ function playerMovedOneStep()
 	return playerPositionX ~= previousPlayerPositionX or playerPositionY ~= previousPlayerPositionY
 end
 
-function initworldGrid()
-	for i = 1, playerPositionX * 2 + 1 do
+function saveWorldGrid(fileName)
+	local saveFile = io.open(fileName, "w")
+
+	saveFile:write(worldGridWidth, "\n")
+	saveFile:write(worldGridHeight, "\n")
+
+	for i = 1, #(worldGrid) do
+		for j = 1, #(worldGrid[i]) do
+			saveFile:write(worldGrid[i][j], "\n")
+		end
+	end
+
+	io.close(saveFile)
+end
+
+function loadWorldGrid(fileName)
+	local lines = {}
+	local index = 1
+
+	for line in io.lines(fileName) do 
+		lines[#lines + 1] = line
+	end
+
+	worldGridWidth = tonumber(lines[index])
+	index = index + 1
+
+	worldGridHeight = tonumber(lines[index])
+	index = index + 1
+
+	for i = 1, worldGridWidth do
+		for j = 1, worldGridHeight do
+			worldGrid[i][j] = tonumber(lines[index])
+			index = index + 1
+		end
+	end
+end
+
+function initWorldGrid()
+	for i = 1, worldGridWidth do
 		worldGrid[i] = {}
 
-		for j = 1, playerPositionY * 2 + 1 do
+		for j = 1, worldGridHeight do
 			worldGrid[i][j] = 0
 		end
 	end
@@ -390,13 +428,13 @@ function updatePlayerRepetitiveStuck()
 end
 
 function updatePlayerMovementFitness()
-	fitnessSpeed = (stuckTime - stuckTimer) * 0.00001
+	fitnessPlayerSpeed = fitnessPlayerSpeed + (stuckTime - stuckTimer) * 0.000001
 
 	-- If player moved to a new grid tile, add fitness
 	if isPlayerInGridRange() then
 		if worldGrid[playerPositionX][playerPositionY] == 0 then
 			worldGrid[playerPositionX][playerPositionY] = 1
-			fitnessPlayerMoving = fitnessPlayerMoving + 0.0001 + fitnessSpeed
+			fitnessPlayerMoving = fitnessPlayerMoving + 0.0001
 		end
 	end
 end
@@ -652,8 +690,7 @@ function nextRun()
 	end
 
 	fitnessPlayerMoving = 0
-	fitnessPlayerExploration = 0
-	fitnessMoveInput = 0
+	fitnessPlayerSpeed = 0
 	
 	playerRepetitiveStuckCurrentCount = 0
 
@@ -662,7 +699,8 @@ function nextRun()
 	runTimer = 0
 	input = {}
 	
-	initworldGrid()
+	initWorldGrid()
+	loadWorldGrid(worldGridSaveFileName)
 
 	-- Only remove places walked from grid, but keep walls etc
 	--[[
@@ -692,8 +730,6 @@ function nextEvolution()
 
 	neuralNetworks[1]:load(saveFileName)
 
-	bestFitness = neuralNetworks[1].fitness
-
 	mutateWithPercentage(math.random(1, 100))
 
 	for i = goodNeuralNetworkCount + 1, #(neuralNetworks) do
@@ -710,7 +746,7 @@ function nextEvolution()
 end
 
 function updateFitness(neuralNetwork)
-	neuralNetwork.fitness = fitnessPlayerMoving + fitnessMoveInput
+	neuralNetwork.fitness = fitnessPlayerMoving + fitnessPlayerSpeed
 end
 
 function mutate()
@@ -774,7 +810,7 @@ function runWorldGridCreator()
 
 	readFromMemory()
 
-	initworldGrid()
+	initWorldGrid()
 
 	disableRunTimers()
 
@@ -804,7 +840,8 @@ function runTraining()
 
 	readFromMemory()
 
-	initworldGrid()
+	initWorldGrid()
+	loadWorldGrid(worldGridSaveFileName)
 
 	enableRunTimers()
 
@@ -899,9 +936,14 @@ function worldGridCreatorLoop()
 
 			print("[" .. worldGridCreatorX .. "][" .. worldGridCreatorY .. "]")
 
-			if worldGridCreatorX >= 680 then
-				worldGridCreatorY = worldGridCreatorY + 1
-				worldGridCreatorX = 670
+			if worldGridCreatorX >= 122 then
+				if worldGridCreatorY < 892 then
+					worldGridCreatorY = worldGridCreatorY + 1
+					worldGridCreatorX = 100
+				else
+					saveWorldGrid(worldGridSaveFileName)
+					break;
+				end
 			else
 				worldGridCreatorX = worldGridCreatorX + 1
 			end
@@ -919,7 +961,7 @@ function trainingLoop()
 
 		trainingLoopPlayerMoved()
 
-		updateWorldGrid()
+		--updateWorldGrid()
 
 		input = getNeuralNetworkInputFromGrid(inputScannerWidth, inputScannerHeight)
 
@@ -1270,8 +1312,8 @@ function NeuralNetwork:printWeights()
 end
 
 -- START PROGRAM
---runTraining()
+runTraining()
 
 --increaseNeuralNetwork(saveFileName)
 
-runWorldGridCreator()
+--runWorldGridCreator()
