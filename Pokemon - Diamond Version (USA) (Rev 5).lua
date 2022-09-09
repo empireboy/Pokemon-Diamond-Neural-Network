@@ -46,16 +46,22 @@ playerRepetitiveStuckDistance = 3
 playerRepetitiveStuckCurrentCount = 0
 playerRepetitiveStuckMaxCount = 10
 isPlayerRepetitiveStuckActive = true
+isPlayerInConversation = false
+playerConversationAddress = 0x39E544
 
 worldGrid = {}
 worldGridCreatorTimer = 0
-worldGridCreatorX = 640
-worldGridCreatorY = 340
+worldGridCreatorX = 670
+worldGridCreatorY = 330
 worldGridCreatorIndex = 0
-wallColor = "White"
 unExploredTileInput = 0
 exploredTileInput = 1
 wallInput = 2
+wallColor = "White"
+npcInput = 3
+npcColor = "Yellow"
+grassInput = 4
+grassColor = "DarkGreen"
 
 stuckTime = 80
 isRunTimerActive = true
@@ -269,6 +275,7 @@ function readFromMemory()
 	playerRotation = memory.read_s32_le(playerRotationAddress)
 	playerWalkingTowardsTileType = memory.read_s32_le(playerWalkingTowardsTileTypeAddress)
 	playerTileType = memory.read_s16_le(playerTileTypeAddress)
+	isPlayerInConversation = numberToBool(memory.read_s32_le(playerConversationAddress))
 end
 
 function clamp(value, min, max)
@@ -280,7 +287,13 @@ function boolToNumber(value)
 end
 
 function numberToBool(value)
-	return value and true or false
+	if value == 1 then
+		return true
+	elseif value == 0 then
+		return false
+	end
+
+	return false
 end
 
 function playerMovedOneStep()
@@ -288,10 +301,10 @@ function playerMovedOneStep()
 end
 
 function initworldGrid()
-	for i = 1, playerPositionX * 5 + 1 do
+	for i = 1, playerPositionX * 2 + 1 do
 		worldGrid[i] = {}
 
-		for j = 1, playerPositionY * 5 + 1 do
+		for j = 1, playerPositionY * 2 + 1 do
 			worldGrid[i][j] = 0
 		end
 	end
@@ -389,23 +402,51 @@ function updatePlayerMovementFitness()
 end
 
 function updateWorldGrid()
-	-- Remove wall from grid if player hits a wall
-	if playerWalkingTowardsTileType == 2 then
+	local gridOffsetX = 0
+	local gridOffsetY = 0
+	local gridPositionX = 0
+	local gridPositionY = 0
+	local gridValue = -1
+
+	for i = 0, 3 do
+		-- Get grid offset by player rotation
 		if playerRotation == 0 then
-			if isInWorldGridRange(playerPositionX, playerPositionY - 1) then
-				worldGrid[playerPositionX][playerPositionY - 1] = 2
-			end
+			gridOffsetX = 0
+			gridOffsetY = -1
 		elseif playerRotation == 1 then
-			if isInWorldGridRange(playerPositionX, playerPositionY + 1) then
-				worldGrid[playerPositionX][playerPositionY + 1] = 2
-			end
+			gridOffsetX = 0
+			gridOffsetY = 1
 		elseif playerRotation == 2 then
-			if isInWorldGridRange(playerPositionX - 1, playerPositionY) then
-				worldGrid[playerPositionX - 1][playerPositionY] = 2
-			end
+			gridOffsetX = -1
+			gridOffsetY = 0
 		elseif playerRotation == 3 then
-			if isInWorldGridRange(playerPositionX + 1, playerPositionY) then
-				worldGrid[playerPositionX + 1][playerPositionY] = 2
+			gridOffsetX = 1
+			gridOffsetY = 0
+		end
+
+		gridPositionX = playerPositionX + gridOffsetX
+		gridPositionY = playerPositionY + gridOffsetY
+
+		if isInWorldGridRange(gridPositionX, gridPositionY) then
+			gridValue = worldGrid[gridPositionX][gridPositionY]
+
+			-- If there already is an NPC, don't change the grid value
+			if
+				gridValue ~= 3
+			then
+				-- Wall
+				if playerWalkingTowardsTileType == 2 then
+					worldGrid[gridPositionX][gridPositionY] = 2
+
+				-- Grass
+				elseif playerTileType == 2 then
+					worldGrid[playerPositionX][playerPositionY] = 4
+				end
+
+				-- NPCs
+				if isPlayerInConversation then
+					worldGrid[gridPositionX][gridPositionY] = 3
+				end
 			end
 		end
 	end
@@ -454,6 +495,10 @@ function getNeuralNetworkColorFromInput(value)
 		color = neuralNetworkNegativeColor
 	elseif value == wallInput then
 		color = wallColor
+	elseif value == npcInput then
+		color = npcColor
+	elseif value == grassInput then
+		color = grassColor
 	else
 		color = neuralNetworkPositiveColor
 	end
@@ -763,6 +808,8 @@ function runTraining()
 
 	enableRunTimers()
 
+	joypadControl = false
+
 	previousPlayerPositionX = playerPositionX
 	previousPlayerPositionY = playerPositionY
 
@@ -777,6 +824,7 @@ function worldGridCreatorLoop()
 
 		joypadTable = {}
 
+		-- Change player position
 		if worldGridCreatorIndex == 0 then
 			savestate.loadslot(saveState)
 
@@ -799,6 +847,7 @@ function worldGridCreatorLoop()
 			memory.write_s32_le(playerPositionYAddressForWrite, worldGridCreatorY)
 		end
 
+		-- Directional player movement
 		if worldGridCreatorIndex >= 0 and worldGridCreatorIndex <= 7 then
 			joypadTable = {
 				Left = true
@@ -817,6 +866,20 @@ function worldGridCreatorLoop()
 			}
 		end
 
+		-- A button press for player interaction with NPCs,
+		-- so we can check if there is an NPC in front of the player.
+		-- Currently only works for saved direction from save state since the player
+		-- takes time to rotate before interaction
+		if worldGridCreatorIndex >= 0 and worldGridCreatorIndex <= 7 then
+			joypadTable.A = true
+		elseif worldGridCreatorIndex >= 10 * 1 and worldGridCreatorIndex <= 10 * 1 + 7 then
+			joypadTable.A = true
+		elseif worldGridCreatorIndex >= 10 * 2 and worldGridCreatorIndex <= 10 * 2 + 7 then
+			joypadTable.A = true
+		elseif worldGridCreatorIndex >= 10 * 3 and worldGridCreatorIndex <= 10 * 3 + 7 then
+			joypadTable.A = true
+		end
+
 		readFromMemory()
 
 		updateWorldGrid()
@@ -827,18 +890,18 @@ function worldGridCreatorLoop()
 			joypad.set(joypadTable)
 		end
 
-		drawInputScanner(input)
+		drawInputScanner(input, 10, 10, 10, 10)
 
 		worldGridCreatorTimer = worldGridCreatorTimer + 1
 
-		if worldGridCreatorIndex >= 10 * 3 + 7 then
+		if worldGridCreatorIndex >= 10 * 3 + 8 then
 			worldGridCreatorIndex = 0
 
 			print("[" .. worldGridCreatorX .. "][" .. worldGridCreatorY .. "]")
 
-			if worldGridCreatorX >= 660 then
+			if worldGridCreatorX >= 680 then
 				worldGridCreatorY = worldGridCreatorY + 1
-				worldGridCreatorX = 640
+				worldGridCreatorX = 670
 			else
 				worldGridCreatorX = worldGridCreatorX + 1
 			end
