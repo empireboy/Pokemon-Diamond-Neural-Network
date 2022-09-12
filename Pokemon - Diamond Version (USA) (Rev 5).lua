@@ -98,7 +98,7 @@ function drawTrainingUI()
 
 	--drawCurrentNeuralNetwork()
 
-	--drawInputScanner(input)
+	drawInputScanner(input)
 end
 
 function drawTrainingText(positionX, positionY, offsetY)
@@ -220,7 +220,7 @@ function deltaTime()
 end
 
 function arrayLength2D(array)
-	length = 0
+	local length = 0
 
 	for i = 1, #(array) do
 		length = length + #array[i]
@@ -230,7 +230,7 @@ function arrayLength2D(array)
 end
 
 function arrayLength3D(array)
-	length = 0
+	local length = 0
 
 	for i = 1, #(array) do
 		for j = 1, #(array[i]) do
@@ -242,7 +242,7 @@ function arrayLength3D(array)
 end
 
 function fileExists(fileName)
-	saveFile = io.open(fileName, "r")
+	local saveFile = io.open(fileName, "r")
 
 	if saveFile then saveFile:close() end
 
@@ -545,8 +545,8 @@ function getNeuralNetworkColorFromInput(value)
 end
 
 function getNeuralNetworkInputFromGrid(width, height)
-	input = {}
-	inputIndex = 1
+	local input = {}
+	local inputIndex = 1
 
 	for i = 1, width do
 		for j = 1, height do
@@ -567,16 +567,16 @@ function getNeuralNetworkInputFromGrid(width, height)
 end
 
 function increaseNeuralNetwork(fileName, newNeuralNetworkLayers)
-	neuralNetworkOld = NeuralNetwork:new(neuralNetworkLayers)
-	neuralNetworkNew = NeuralNetwork:new(newNeuralNetworkLayers)
+	local neuralNetworkOld = NeuralNetwork:new(neuralNetworkLayers)
+	local neuralNetworkNew = NeuralNetwork:new(newNeuralNetworkLayers)
 
 	neuralNetworkOld:load(fileName)
 
-	lines = {}
-	linesNew = {}
-	index = 1
-	biasesToAdd = arrayLength2D(neuralNetworkNew.biases) - arrayLength2D(neuralNetworkOld.biases)
-	weightsToAdd = arrayLength3D(neuralNetworkNew.weights) - arrayLength3D(neuralNetworkOld.weights)
+	local lines = {}
+	local linesNew = {}
+	local index = 1
+	local biasesToAdd = arrayLength2D(neuralNetworkNew.biases) - arrayLength2D(neuralNetworkOld.biases)
+	local weightsToAdd = arrayLength3D(neuralNetworkNew.weights) - arrayLength3D(neuralNetworkOld.weights)
 
 	for line in io.lines(fileName) do
 		lines[#lines + 1] = line
@@ -615,7 +615,7 @@ function increaseNeuralNetwork(fileName, newNeuralNetworkLayers)
 	end
 
 	-- Save new values
-	saveFile = io.open(fileName, "w")
+	local saveFile = io.open(fileName, "w")
 
 	-- Save best Fitness
 	saveFile:write(linesNew[1], "\n")
@@ -630,10 +630,10 @@ function increaseNeuralNetwork(fileName, newNeuralNetworkLayers)
 end
 
 function sortNeuralNetworks(neuralNetworks)
-	highestFitness = -1
-	bestNeuralNetworkIndex = -1
-	neuralNetworksSorted = {}
-	neuralNetworksUsed = {}
+	local highestFitness = -1
+	local bestNeuralNetworkIndex = -1
+	local neuralNetworksSorted = {}
+	local neuralNetworksUsed = {}
 
 	for i = 1, #(neuralNetworks) do
 		neuralNetworksUsed[i] = 0
@@ -671,7 +671,7 @@ function nextRun()
 	if 
 		neuralNetworks[neuralNetworkIndex].fitness > bestFitness
 	then
-		savedFitness = 0
+		local savedFitness = 0
 
 		if fileExists(saveFileName) then
 			saveFile = io.open(saveFileName)
@@ -746,7 +746,11 @@ function nextEvolution()
 end
 
 function updateFitness(neuralNetwork)
-	neuralNetwork.fitness = fitnessPlayerMoving + fitnessPlayerSpeed
+	neuralNetwork.fitness = getCurrentFitness()
+end
+
+function getCurrentFitness()
+	return fitnessPlayerMoving + fitnessPlayerSpeed
 end
 
 function mutate()
@@ -965,7 +969,7 @@ function trainingLoop()
 
 		input = getNeuralNetworkInputFromGrid(inputScannerWidth, inputScannerHeight)
 
-		output = neuralNetworks[neuralNetworkIndex]:feedForward(input)
+		local output = neuralNetworks[neuralNetworkIndex]:feedForward(input)
 
 		joypadTable = {
 			Right = output[1] > 0,
@@ -1025,7 +1029,7 @@ function NeuralNetwork:feedForward(inputs)
 
 	for i = 2, #(self.layers) do
 		for j = 1, #(self.neurons[i]) do
-			value = 0
+			local value = 0
 
 			for k = 1, #(self.neurons[i - 1]) do
 				value = value + self.weights[i - 1][j][k] * self.neurons[i - 1][k]
@@ -1147,7 +1151,7 @@ function NeuralNetwork:copyPercentage(neuralNetwork, percentage)
 end
 
 function NeuralNetwork:save(fileName)
-	saveFile = io.open(fileName, "w")
+	local saveFile = io.open(fileName, "w")
 
 	saveFile:write(bestFitness, "\n")
 
@@ -1169,8 +1173,8 @@ function NeuralNetwork:save(fileName)
 end
 
 function NeuralNetwork:load(fileName)
-	lines = {}
-	index = 1
+	local lines = {}
+	local index = 1
 
 	for line in io.lines(fileName) do 
 		lines[#lines + 1] = line
@@ -1199,7 +1203,7 @@ function NeuralNetwork:load(fileName)
 end
 
 function NeuralNetwork:isEqual(neuralNetwork)
-	equal = true
+	local equal = true
 
 	for i = 1, #(self.biases) do
 		for j = 1, #(self.biases[i]) do
@@ -1245,7 +1249,7 @@ end
 function NeuralNetwork:initWeights()
 	for i = 2, #(self.layers) do
 		self.weights[i - 1] = {}
-		neuronsInPreviousLayer = self.layers[i - 1]
+		local neuronsInPreviousLayer = self.layers[i - 1]
 
 		for j = 1, #(self.neurons[i]) do
 			self.weights[i - 1][j] = {}
@@ -1314,6 +1318,6 @@ end
 -- START PROGRAM
 runTraining()
 
---increaseNeuralNetwork(saveFileName)
+--increaseNeuralNetwork(saveFileName, {inputScannerWidth * inputScannerHeight, 100, 100, 5})
 
 --runWorldGridCreator()
