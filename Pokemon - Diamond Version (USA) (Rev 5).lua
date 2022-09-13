@@ -1,9 +1,12 @@
 NeuralNetwork = {}
+UIDrawer = {}
+ReplayMemory = {}
 
 input = {}
 inputScannerBorderString = "---------------------"
 inputScannerWidth = 11
 inputScannerHeight = 11
+output = {}
 
 neuralNetworks = {}
 neuralNetworkLayers = {inputScannerWidth * inputScannerHeight, 60, 60, 5}
@@ -89,92 +92,10 @@ trainingTextPositionX = 5
 trainingTextPositionY = 5
 trainingTextOffsetY = 20
 
+replayMemory = nil
+replayMemorySize = 150
+
 --print(joypad.getimmediate())
-
-function drawTrainingUI()
-	drawTrainingText(trainingTextPositionX, trainingTextPositionY, trainingTextOffsetY)
-
-	drawReplayText(neuralNetworkIndex)
-
-	--drawCurrentNeuralNetwork()
-
-	drawInputScanner(input)
-end
-
-function drawTrainingText(positionX, positionY, offsetY)
-	gui.text(positionX, positionY + offsetY * 0, "Best Fitness: " .. bestFitness)
-	gui.text(positionX, positionY + offsetY * 1, "Best Run: " .. bestRun)
-	gui.text(positionX, positionY + offsetY * 3, "Current Run: " .. totalRuns + 1)
-	gui.text(positionX, positionY + offsetY * 4, "Current Evolution: " .. evolution)
-end
-
-function drawReplayText(neuralNetworkIndex)
-	local replayText = string.format(replayFormat, neuralNetworkIndex)
-
-	if neuralNetworkIndex <= goodNeuralNetworkCount and runTimer <= replayTime then
-		gui.drawText(gameCenterX(), gameCenterY(), replayText, nil, nil, (client.screenwidth() + 250 - client.borderwidth() * 2) / 8, nil, "bold", "center", "center")
-	end
-end
-
-function drawNeuralNetwork(neuralNetwork, positionX, positionY)
-	positionX = positionX or 5
-	positionY = positionY or 125
-
-	local color, offsetX, offsetY
-
-	for i = 1, #(neuralNetwork.neurons) do
-		for j = 1, #(neuralNetwork.neurons[i]) do
-			offsetX = (client.borderwidth() + extraBorderWidth) / #(neuralNetwork.neurons) / 2.1
-			offsetY = (client.screenheight() - 150) / #(neuralNetworks[neuralNetworkIndex].neurons[i])
-
-			local neuronValue = neuralNetworks[neuralNetworkIndex].neurons[i][j]
-
-			if
-				(neuronValue == exploredTileInput and i == 1) or
-				(neuronValue > 0 and i ~= 1)
-			then
-				color = getNeuralNetworkColorFromValue(neuronValue)
-			elseif neuronValue == wallInput and i == 1 then
-				color = getNeuralNetworkColorFromInput(wallInput)
-			else
-				color = getNeuralNetworkColorFromValue(neuronValue)
-			end
-
-			gui.drawRectangle(positionX + offsetX * (i - 1), positionY + offsetY * (j - 1), 10, 1, color, color)
-		end
-	end
-end
-
-function drawCurrentNeuralNetwork()
-	drawNeuralNetwork(neuralNetworks[neuralNetworkIndex])
-end
-
-function drawInputScanner(input, positionX, positionY, tileWidth, tileHeight, outlineColor)
-	positionX = positionX or 240
-	positionY = positionY or 5
-	tileWidth = tileWidth or 9
-	tileHeight = tileHeight or 9
-
-	local inputScannerStrings = {}
-	local inputScannerIndex = 1
-	local color
-
-	for i = 1, inputScannerWidth do
-		for j = 1, inputScannerHeight do
-			color = getNeuralNetworkColorFromInput(input[inputScannerIndex])
-
-			outlineColorFinal = outlineColor or color
-
-			gui.drawRectangle(
-				positionX + tileWidth * (i - 1),
-				positionY + tileHeight * (j - 1),
-				tileWidth, tileHeight, outlineColorFinal, color
-			)
-
-			inputScannerIndex = inputScannerIndex + 1
-		end
-	end
-end
 
 function printInputScanner(input)
 	local inputScannerStrings = {}
@@ -197,6 +118,14 @@ function printInputScanner(input)
 	end
 
 	print(inputScannerBorderString)
+end
+
+function setJoypadInput(joypadTable)
+	if joypadControl then
+		return
+	end
+
+	joypad.set(joypadTable)
 end
 
 function enableRunTimers()
@@ -239,6 +168,18 @@ function arrayLength3D(array)
 	end
 	
 	return length
+end
+
+function getJoypadTableFromOutput(output)
+	local joypadTable = {
+		Right = output[1] > 0,
+		Left = output[2] > 0,
+		Up = output[3] > 0,
+		Down = output[4] > 0,
+		B = output[5] > 0
+	}
+
+	return joypadTable
 end
 
 function fileExists(fileName)
@@ -364,6 +305,10 @@ function initNeuralNetworks()
 	end
 end
 
+function initReplayMemory()
+	replayMemory = ReplayMemory:new(replayMemorySize)
+end
+
 function replay()
 	replayAfterEvolution = true
 
@@ -386,8 +331,7 @@ function initTrainingLoop()
 	-- Start of run initialization
 	if runTimer == 0 and isRunTimerActive then
 		-- Reset previous player position if a new run started
-		previousPlayerPositionX = playerPositionX
-		previousPlayerPositionY = playerPositionY
+		updatePlayerPreviousPosition()
 
 		playerRepetitiveStuckPositionX = playerPositionX
 		playerRepetitiveStuckPositionY = playerPositionY
@@ -406,6 +350,11 @@ function trainingLoopPlayerMoved()
 
 		stuckTimer = 0
 	end
+end
+
+function updatePlayerPreviousPosition()
+	previousPlayerPositionX = playerPositionX
+	previousPlayerPositionY = playerPositionY
 end
 
 function updatePlayerRepetitiveStuck()
@@ -820,8 +769,7 @@ function runWorldGridCreator()
 
 	joypadControl = false
 
-	previousPlayerPositionX = playerPositionX
-	previousPlayerPositionY = playerPositionY
+	updatePlayerPreviousPosition()
 
 	worldGridCreatorLoop()
 end
@@ -851,8 +799,9 @@ function runTraining()
 
 	joypadControl = false
 
-	previousPlayerPositionX = playerPositionX
-	previousPlayerPositionY = playerPositionY
+	initReplayMemory();
+
+	updatePlayerPreviousPosition()
 
 	initNeuralNetworks()
 
@@ -927,11 +876,9 @@ function worldGridCreatorLoop()
 
 		input = getNeuralNetworkInputFromGrid(inputScannerWidth, inputScannerHeight)
 
-		if not joypadControl then
-			joypad.set(joypadTable)
-		end
+		setJoypadInput(joypadTable)
 
-		drawInputScanner(input, 10, 10, 10, 10)
+		UIDrawer.drawInputScanner(input, 10, 10, 10, 10)
 
 		worldGridCreatorTimer = worldGridCreatorTimer + 1
 
@@ -967,37 +914,121 @@ function trainingLoop()
 
 		--updateWorldGrid()
 
+		local previousInput = input
+		local previousOutput = output
+		local reward = getCurrentFitness()
+
 		input = getNeuralNetworkInputFromGrid(inputScannerWidth, inputScannerHeight)
 
-		local output = neuralNetworks[neuralNetworkIndex]:feedForward(input)
-
-		joypadTable = {
-			Right = output[1] > 0,
-			Left = output[2] > 0,
-			Up = output[3] > 0,
-			Down = output[4] > 0,
-			B = output[5] > 0
-		}
-
-		if not joypadControl then
-			joypad.set(joypadTable)
+		if runTimer > 0 then
+			replayMemory:addReplay(previousInput, previousOutput, reward, input)
 		end
+
+		output = neuralNetworks[neuralNetworkIndex]:feedForward(input)
+
+		joypadTable = getJoypadTableFromOutput(output)
+
+		setJoypadInput(joypadTable)
 
 		updateRunTimer()
 
 		updateStuckTimer()
 
-		drawTrainingUI()
+		--UIDrawer.drawTrainingUI()
 
 		emu.frameadvance()
 
-		previousPlayerPositionX = playerPositionX
-		previousPlayerPositionY = playerPositionY
+		updatePlayerPreviousPosition()
+	end
+end
+
+function UIDrawer.drawTrainingUI()
+	UIDrawer.drawTrainingText(trainingTextPositionX, trainingTextPositionY, trainingTextOffsetY)
+
+	UIDrawer.drawReplayText(neuralNetworkIndex)
+
+	UIDrawer.drawCurrentNeuralNetwork()
+
+	UIDrawer.drawInputScanner(input)
+end
+
+function UIDrawer.drawTrainingText(positionX, positionY, offsetY)
+	gui.text(positionX, positionY + offsetY * 0, "Best Fitness: " .. bestFitness)
+	gui.text(positionX, positionY + offsetY * 1, "Best Run: " .. bestRun)
+	gui.text(positionX, positionY + offsetY * 3, "Current Run: " .. totalRuns + 1)
+	gui.text(positionX, positionY + offsetY * 4, "Current Evolution: " .. evolution)
+end
+
+function UIDrawer.drawReplayText(neuralNetworkIndex)
+	local replayText = string.format(replayFormat, neuralNetworkIndex)
+
+	if neuralNetworkIndex <= goodNeuralNetworkCount and runTimer <= replayTime then
+		gui.drawText(gameCenterX(), gameCenterY(), replayText, nil, nil, (client.screenwidth() + 250 - client.borderwidth() * 2) / 8, nil, "bold", "center", "center")
+	end
+end
+
+function UIDrawer.drawNeuralNetwork(neuralNetwork, positionX, positionY)
+	positionX = positionX or 5
+	positionY = positionY or 125
+
+	local color, offsetX, offsetY
+
+	for i = 1, #(neuralNetwork.neurons) do
+		for j = 1, #(neuralNetwork.neurons[i]) do
+			offsetX = (client.borderwidth() + extraBorderWidth) / #(neuralNetwork.neurons) / 2.1
+			offsetY = (client.screenheight() - 150) / #(neuralNetworks[neuralNetworkIndex].neurons[i])
+
+			local neuronValue = neuralNetworks[neuralNetworkIndex].neurons[i][j]
+
+			if
+				(neuronValue == exploredTileInput and i == 1) or
+				(neuronValue > 0 and i ~= 1)
+			then
+				color = getNeuralNetworkColorFromValue(neuronValue)
+			elseif neuronValue == wallInput and i == 1 then
+				color = getNeuralNetworkColorFromInput(wallInput)
+			else
+				color = getNeuralNetworkColorFromValue(neuronValue)
+			end
+
+			gui.drawRectangle(positionX + offsetX * (i - 1), positionY + offsetY * (j - 1), 10, 1, color, color)
+		end
+	end
+end
+
+function UIDrawer.drawCurrentNeuralNetwork()
+	UIDrawer.drawNeuralNetwork(neuralNetworks[neuralNetworkIndex])
+end
+
+function UIDrawer.drawInputScanner(input, positionX, positionY, tileWidth, tileHeight, outlineColor)
+	positionX = positionX or 240
+	positionY = positionY or 5
+	tileWidth = tileWidth or 9
+	tileHeight = tileHeight or 9
+
+	local inputScannerStrings = {}
+	local inputScannerIndex = 1
+	local color
+
+	for i = 1, inputScannerWidth do
+		for j = 1, inputScannerHeight do
+			color = getNeuralNetworkColorFromInput(input[inputScannerIndex])
+
+			outlineColorFinal = outlineColor or color
+
+			gui.drawRectangle(
+				positionX + tileWidth * (i - 1),
+				positionY + tileHeight * (j - 1),
+				tileWidth, tileHeight, outlineColorFinal, color
+			)
+
+			inputScannerIndex = inputScannerIndex + 1
+		end
 	end
 end
 
 function NeuralNetwork:new(layers)
-	this = {}
+	local this = {}
 	setmetatable(this, self)
 	self.__index = self
 
@@ -1035,7 +1066,7 @@ function NeuralNetwork:feedForward(inputs)
 				value = value + self.weights[i - 1][j][k] * self.neurons[i - 1][k]
 			end
 
-			self.neurons[i][j] = this:activate(value + self.biases[i][j])
+			self.neurons[i][j] = self:activate(value + self.biases[i][j])
 
 			--[[
 			if j >= #(self.neurons[i]) then
@@ -1313,6 +1344,33 @@ function NeuralNetwork:printWeights()
 			end
 		end
 	end
+end
+
+function ReplayMemory:new(maxSize)
+	local this = {}
+	setmetatable(this, self)
+	self.__index = self
+
+	this.maxSize = maxSize
+	this.size = 0
+	this.replays = {}
+
+	return this
+end
+
+function ReplayMemory:addReplay(state, actions, reward, nextState)
+	if self.size >= self.maxSize then
+		return
+	end
+
+	self.size = self.size + 1
+
+	self.replays[self.size] = {}
+
+	self.replays[self.size]["State"] = state
+	self.replays[self.size]["Actions"] = actions
+	self.replays[self.size]["Reward"] = reward
+	self.replays[self.size]["Next State"] = nextState
 end
 
 -- START PROGRAM
