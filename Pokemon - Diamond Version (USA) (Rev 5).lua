@@ -10,6 +10,7 @@ output = {}
 
 neuralNetworks = {}
 neuralNetworkLayers = {inputScannerWidth * inputScannerHeight, 60, 60, 5}
+neuralNetworkLayersBackPropagationTest = {3, 30, 30, 1}
 neuralNetworkIndex = 1
 neuralNetworkCount = 20
 goodNeuralNetworkCount = 5
@@ -182,6 +183,23 @@ function getJoypadTableFromOutput(output)
 	return joypadTable
 end
 
+function getRandomOutput()
+	local joypadTable = {}
+	local buttonCount = 5
+
+	for i = 1, buttonCount do
+		local randomInt = math.random(0, 100)
+
+		if (randomInt <= 100 / buttonCount) then
+			joypadTable[i] = 1
+		else
+			joypadTable[i] = 0
+		end
+	end
+
+	return joypadTable
+end
+
 function fileExists(fileName)
 	local saveFile = io.open(fileName, "r")
 
@@ -303,6 +321,21 @@ function initNeuralNetworks()
 	else
 		mutateAll()
 	end
+end
+
+function initNeuralNetworksForQLearning()
+	neuralNetworks[1] = NeuralNetwork:new(neuralNetworkLayers)
+
+	if fileExists(saveFileName) then
+		neuralNetworks[1]:load(saveFileName)
+	else
+		neuralNetworks[1]:mutate(100, mutationStrength)
+	end
+end
+
+function initNeuralNetworksForBackPropagationTest()
+	neuralNetworks[1] = NeuralNetwork:new(neuralNetworkLayersBackPropagationTest)
+	neuralNetworks[1]:mutate(100, mutationStrength)
 end
 
 function initReplayMemory()
@@ -808,6 +841,57 @@ function runTraining()
 	trainingLoop()
 end
 
+function runQLearningTraining()
+	math.randomseed(os.time())
+
+	event.onexit(onExit)
+
+	console.clear()
+
+	client.SetClientExtraPadding(extraBorderWidth, 0, 0, 0)
+
+	memory.usememorydomain("Main RAM")
+
+	savestate.loadslot(saveState)
+
+	gui.use_surface("client")
+	gui.clearGraphics()
+
+	readFromMemory()
+
+	initWorldGrid()
+	loadWorldGrid(worldGridSaveFileName)
+
+	enableRunTimers()
+
+	joypadControl = false
+
+	initReplayMemory();
+
+	updatePlayerPreviousPosition()
+
+	initNeuralNetworksForQLearning()
+
+	trainingLoopQLearning()
+end
+
+function runBackPropagationTest()
+	math.randomseed(os.time())
+
+	event.onexit(onExit)
+
+	console.clear()
+
+	client.SetClientExtraPadding(extraBorderWidth, 0, 0, 0)
+
+	gui.use_surface("client")
+	gui.clearGraphics()
+
+	initNeuralNetworksForBackPropagationTest()
+
+	trainingLoopBackPropagationTest()
+end
+
 function worldGridCreatorLoop()
 	while true do
 		gui.clearGraphics()
@@ -914,15 +998,7 @@ function trainingLoop()
 
 		--updateWorldGrid()
 
-		local previousInput = input
-		local previousOutput = output
-		local reward = getCurrentFitness()
-
 		input = getNeuralNetworkInputFromGrid(inputScannerWidth, inputScannerHeight)
-
-		if runTimer > 0 then
-			replayMemory:addReplay(previousInput, previousOutput, reward, input)
-		end
 
 		output = neuralNetworks[neuralNetworkIndex]:feedForward(input)
 
@@ -939,6 +1015,64 @@ function trainingLoop()
 		emu.frameadvance()
 
 		updatePlayerPreviousPosition()
+	end
+end
+
+function trainingLoopQLearning()
+	while true do
+		initTrainingLoop()
+
+		trainingLoopPlayerMoved()
+
+		--updateWorldGrid()
+
+		local previousInput = input
+		local previousOutput = output
+		local reward = getCurrentFitness()
+
+		input = getNeuralNetworkInputFromGrid(inputScannerWidth, inputScannerHeight)
+
+		if runTimer > 0 then
+			replayMemory:addReplay(previousInput, previousOutput, reward, input)
+		end
+
+		--output = neuralNetworks[neuralNetworkIndex]:feedForward(input)
+		output = getRandomOutput()
+
+		joypadTable = getJoypadTableFromOutput(output)
+
+		setJoypadInput(joypadTable)
+
+		updateRunTimer()
+
+		updateStuckTimer()
+
+		UIDrawer.drawTrainingUI()
+
+		emu.frameadvance()
+
+		updatePlayerPreviousPosition()
+	end
+end
+
+function trainingLoopBackPropagationTest()
+	local outputTest = 0.5
+
+	while true do
+		gui.clearGraphics()
+
+		input = {0, 0, 1}
+
+		output = neuralNetworks[neuralNetworkIndex]:feedForward(input)
+
+		print("Current output: " .. output[1])
+		--print("Target output: " .. outputTest)
+
+		neuralNetworks[neuralNetworkIndex]:backPropagate({outputTest}, outputTest - output[1])
+
+		UIDrawer.drawCurrentNeuralNetwork()
+
+		emu.frameadvance()
 	end
 end
 
@@ -1079,6 +1213,42 @@ function NeuralNetwork:feedForward(inputs)
 	end
 
 	return self.neurons[#(self.neurons)]
+end
+
+function NeuralNetwork:backPropagate(outputs, error)
+	local layer = #(self.layers)
+
+	for outputIndex = 1, #(outputs) do
+		for layerIndex = 1, #(self.layers) - 1 do
+			for neuronIndex = 1, #(self.neurons[layer]) do
+				for weightIndex = 1, #(self.weights[layer - 1][neuronIndex]) do
+					local weight = self.weights[layer - 1][neuronIndex][weightIndex]
+					local newWeight = weight
+
+					--[[if weight < 0 then
+						newWeight = weight - math.abs(error) * 0.4
+					else
+						newWeight = weight + math.abs(error) * 0.4
+					end--]]
+
+					if error >= 0 then
+						newWeight = weight + math.abs(weight) * 0.1
+					else
+						newWeight = weight - math.abs(weight) * 0.1
+					end
+
+					self.weights[layer - 1][neuronIndex][weightIndex] = newWeight
+
+					if weightIndex == 1  and neuronIndex == 1 and layerIndex == 3 then
+						--print("Error: " .. error)
+						--print("Updated weight [" .. layer - 1 .. "][" .. neuronIndex .. "][" .. weightIndex .. "] from " .. weight .. " to " .. newWeight)
+					end
+				end
+			end
+
+			layer = layer - 1
+		end
+	end
 end
 
 function NeuralNetwork:mutate(chance, value)
@@ -1374,7 +1544,11 @@ function ReplayMemory:addReplay(state, actions, reward, nextState)
 end
 
 -- START PROGRAM
-runTraining()
+--runTraining()
+
+runQLearningTraining()
+
+--runBackPropagationTest()
 
 --increaseNeuralNetwork(saveFileName, {inputScannerWidth * inputScannerHeight, 100, 100, 5})
 
