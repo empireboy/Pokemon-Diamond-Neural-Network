@@ -4,20 +4,25 @@ ReplayMemory = {}
 
 input = {}
 inputScannerBorderString = "---------------------"
-inputScannerWidth = 11
-inputScannerHeight = 11
+inputScannerWidth = 3 -- 11
+inputScannerHeight = 3 -- 11
 output = {}
 
 neuralNetworks = {}
-neuralNetworkLayers = {inputScannerWidth * inputScannerHeight, 60, 60, 60, 5}
-neuralNetworkLayersBackPropagationTest = {1, 2, 1, 1}
+neuralNetworkLayers = {inputScannerWidth * inputScannerHeight, 10, 10, 5}
+neuralNetworkLayersBackPropagationTest = {inputScannerWidth * inputScannerHeight, 10, 5}
 neuralNetworkIndex = 1
 neuralNetworkCount = 20
 goodNeuralNetworkCount = 5
 averageNeuralNetworkCount = 5
+neuralNetworkNegativeColorLow = "#300000"
 neuralNetworkNegativeColor = "Red"
-neuralNetworkPositiveColor = "Green"
+neuralNetworkNegativeColorHigh = "#FFCCCB"
+neuralNetworkPositiveColorLow = "#003000"
+neuralNetworkPositiveColor = "green"
+neuralNetworkPositiveColorHigh = "#00FF00"
 neuralNetworkType = "Q Learning"
+neuralNetworkOutputType = "Random"
 
 bestRun = -1
 totalRuns = 0
@@ -95,7 +100,8 @@ trainingTextPositionY = 5
 trainingTextOffsetY = 20
 
 replayMemory = nil
-replayMemorySize = 150
+replayMemorySize = 100
+replayMemorySaveFileName = "Replay Memory.txt"
 
 --print(joypad.getimmediate())
 
@@ -194,7 +200,7 @@ function getRandomOutput()
 		if (randomInt <= 100 / buttonCount) then
 			joypadTable[i] = 1
 		else
-			joypadTable[i] = 0
+			joypadTable[i] = -1
 		end
 	end
 
@@ -356,6 +362,10 @@ end
 
 function initReplayMemory()
 	replayMemory = ReplayMemory:new(replayMemorySize)
+
+	if fileExists(replayMemorySaveFileName) then
+		replayMemory:load(replayMemorySaveFileName)
+	end
 end
 
 function replay()
@@ -430,13 +440,13 @@ function updatePlayerRepetitiveStuck()
 end
 
 function updatePlayerMovementFitness()
-	fitnessPlayerSpeed = fitnessPlayerSpeed + (stuckTime - stuckTimer) * 0.000001
+	fitnessPlayerSpeed = fitnessPlayerSpeed + (stuckTime - stuckTimer) * 1
 
 	-- If player moved to a new grid tile, add fitness
 	if isPlayerInGridRange() then
 		if worldGrid[playerPositionX][playerPositionY] == 0 then
 			worldGrid[playerPositionX][playerPositionY] = 1
-			fitnessPlayerMoving = fitnessPlayerMoving + 0.0001
+			fitnessPlayerMoving = fitnessPlayerMoving + 1
 		end
 	end
 end
@@ -527,10 +537,18 @@ end
 function getNeuralNetworkColorFromValue(value)
 	local color
 
-	if value <= 0 then
+	if value <= -0.66 then
+		color = neuralNetworkNegativeColorHigh
+	elseif value <= -0.33 and value > -0.66 then
 		color = neuralNetworkNegativeColor
-	else
+	elseif value <= 0 and value > -0.33 then
+		color = neuralNetworkNegativeColorLow
+	elseif value >= 0.66 then
+		color = neuralNetworkPositiveColorHigh
+	elseif value >= 0.33 and value < 0.66 then
 		color = neuralNetworkPositiveColor
+	elseif value > 0 and value < 0.33 then
+		color = neuralNetworkPositiveColorLow
 	end
 
 	return color
@@ -735,7 +753,10 @@ function nextRunQLearning()
 
 	print("Runs: " .. totalRuns)
 
-	--updateFitness(neuralNetworks[neuralNetworkIndex])
+	-- Save after every run so you don't lose progress
+	neuralNetworks[neuralNetworkIndex]:save(saveFileName)
+
+	replayMemory:save(replayMemorySaveFileName)
 
 	if 
 		neuralNetworks[neuralNetworkIndex].fitness > bestFitness
@@ -752,8 +773,6 @@ function nextRunQLearning()
 			bestFitness = neuralNetworks[neuralNetworkIndex].fitness
 			bestRun = totalRuns
 
-			neuralNetworks[neuralNetworkIndex]:save(saveFileName)
-
 			print("New Best Fitness: " .. bestFitness)
 		end
 	end
@@ -763,7 +782,6 @@ function nextRunQLearning()
 	
 	playerRepetitiveStuckCurrentCount = 0
 
-	--neuralNetworkIndex = neuralNetworkIndex + 1
 	stuckTimer = 0
 	runTimer = 0
 	input = {}
@@ -775,13 +793,9 @@ function nextRunQLearning()
 	initWorldGrid()
 	loadWorldGrid(worldGridSaveFileName)
 
-	--[[
-	if neuralNetworkIndex >= #(neuralNetworks) then
-		nextEvolution()
-	end
-	--]]
-
 	savestate.loadslot(saveState)
+
+	trainingLoopQLearning()
 end
 
 function nextEvolution()
@@ -1104,8 +1118,8 @@ function trainingLoop()
 	end
 end
 
+local test = 0
 function trainingLoopQLearning()
-	local test = 0
 	while true do
 		initTrainingLoop()
 
@@ -1126,25 +1140,52 @@ function trainingLoopQLearning()
 
 		if runTimer > 0 then
 			if reward > 0 then
-				replayMemory:addReplay(previousInput, previousOutput, reward, input)
+				if neuralNetworkOutputType == "Random" then
+					replayMemory:addReplay(previousInput, previousOutput, reward, input)
 
-				local replays = replayMemory:getBatch(6)
-				local totalErrors = {0, 0, 0, 0, 0}
+					local replays = replayMemory:getBatch(6)
+					local targetOutputs = {0, 0, 0, 0, 0}
+					local totalErrors = {0, 0, 0, 0, 0}
+					local discountFactor = 0.9
+					local learningRate = 0.01
+					
+					for i = 1, #(replays) do
+						local outputPolicy = neuralNetworks[neuralNetworkIndex]:feedForward(replays[i]["State"])
+						local outputTarget = neuralNetworks[neuralNetworkIndex + 1]:feedForward(replays[i]["Next State"])
 
-				for i = 1, #(replays) do
-					local outputPolicy = neuralNetworks[neuralNetworkIndex]:feedForward(replays[i]["State"])
-					local outputTarget = neuralNetworks[neuralNetworkIndex + 1]:feedForward(replays[i]["Next State"])
+						--print("Output Policy:")
+						--print(outputPolicy)
 
-					local outputErrors = {}
+						--print("Output Target:")
+						--print(outputTarget)
+						
+						--print("Reward: " .. replays[i]["Reward"] .. " for replay " .. i)
 
-					for errorIndex = 1, #(outputPolicy) do
-						outputErrors[errorIndex] = replays[i]["Reward"] + outputTarget[errorIndex] - outputPolicy[errorIndex]
+						local outputErrors = {}
 
-						totalErrors[errorIndex] = totalErrors[errorIndex] + outputErrors[errorIndex]
+						local maxQValue = replays[i]["Reward"] + discountFactor * math.max(unpack(outputTarget))
+
+						for errorIndex = 1, #(outputPolicy) do
+							--outputErrors[errorIndex] = (replays[i]["Reward"] * 100 * outputTarget[errorIndex]) - outputPolicy[errorIndex]
+							--outputErrors[errorIndex] = replays[i]["Reward"] * outputTarget[errorIndex] - outputPolicy[errorIndex]
+							--outputErrors[errorIndex] = -1 + (replays[i]["Reward"] + (0.99 * outputTarget[errorIndex])) - outputPolicy[errorIndex]
+							outputErrors[errorIndex] = (1 - learningRate) * outputPolicy[errorIndex] + learningRate * maxQValue
+
+							totalErrors[errorIndex] = totalErrors[errorIndex] + outputErrors[errorIndex]
+
+							targetOutputs[errorIndex] = outputPolicy[errorIndex] + outputErrors[errorIndex]
+						end
+
+						print("Target Outputs:")
+						print(targetOutputs)
+
+						neuralNetworks[neuralNetworkIndex]:backPropagate(targetOutputs, 0.01)
 					end
-				end
 
-				neuralNetworks[neuralNetworkIndex]:backPropagate(totalErrors, 10)
+					--print("Total Error: " .. totalErrors[1] + totalErrors[2] + totalErrors[3] + totalErrors[4] + totalErrors[5])
+
+					--neuralNetworks[neuralNetworkIndex]:backPropagate(targetOutputs, 0.01)
+				end
 			end
 		end
 
@@ -1152,11 +1193,19 @@ function trainingLoopQLearning()
 			if math.random(0, 100) >= test then
 				output = getRandomOutput()
 
-				print("Random output")
+				neuralNetworks[neuralNetworkIndex].neurons[#(neuralNetworks[neuralNetworkIndex].layers)] = output
+
+				neuralNetworkOutputType = "Random"
 			else
 				output = neuralNetworks[neuralNetworkIndex]:feedForward(input)
 
-				print("Policy output")
+				neuralNetworkOutputType = "Policy"
+
+				
+				if runTimer == 0 then
+					print("Current Policy Output for runTimer == 0")
+					print(output)
+				end
 			end
 		end
 
@@ -1165,10 +1214,12 @@ function trainingLoopQLearning()
 		if test >= 100 then
 			print("Updating target network")
 
+			evolution = evolution + 1
+
 			neuralNetworks[neuralNetworkIndex]:copy(neuralNetworks[neuralNetworkIndex + 1])
+
 			test = 0
 		end
-		
 
 		if not isInputEqual(input, previousInput) then
 			joypadTable = getJoypadTableFromOutput(output)
@@ -1192,47 +1243,118 @@ function trainingLoopBackPropagationTest()
 	while true do
 		gui.clearGraphics()
 
-		input = {0}
-
-		local outputTarget = {-0.1}
-		local errors = {}
+		local learningRate = 0.01
 		local totalError = 0
 
+		-- Output 1
+
+		for i = 1, inputScannerWidth * inputScannerHeight do
+			input[i] = 0
+		end
+
+		local outputTargets = {-0.5, 0, 0.5, 1, -1}
+
+		local errors = {}
+
 		output = neuralNetworks[neuralNetworkIndex]:feedForward(input)
-
-		--neuralNetworks[neuralNetworkIndex]:printWeights()
 		
-		----[[
-		print(
-			"Current output: [" ..
-			tonumber(string.format("%.9f", output[1])) ..
-			"]"
-		)
-		----]]
-
-		--neuralNetworks[neuralNetworkIndex]:printBiases()
-
 		--[[
 		print(
 			"Current output: [" ..
-			tonumber(string.format("%.1f", output[1])) ..
+			tonumber(string.format("%.3f", output[1])) ..
 			"] [" ..
-			tonumber(string.format("%.1f", output[2])) ..
+			tonumber(string.format("%.3f", output[2])) ..
 			"] [" ..
-			tonumber(string.format("%.1f", output[3])) ..
+			tonumber(string.format("%.3f", output[3])) ..
+			"] [" ..
+			tonumber(string.format("%.3f", output[4])) ..
+			"] [" ..
+			tonumber(string.format("%.3f", output[5])) ..
 			"]"
 		)
 		--]]
-		--print("Target output: " .. outputTest)
 
-		for i = 1, #(outputTarget) do
-			errors[i] = (output[i] - outputTarget[i])^2
+		for i = 1, #(outputTargets) do
+			errors[i] = (output[i] - outputTargets[i])^2
 			totalError = totalError + errors[i]
 		end
 
-		print("Total error: " .. string.format("%.10f", totalError))
+		neuralNetworks[neuralNetworkIndex]:backPropagate(outputTargets, learningRate)
 
-		neuralNetworks[neuralNetworkIndex]:backPropagate(outputTarget, 0.1)
+		-- Output 2
+
+		for i = 1, inputScannerWidth * inputScannerHeight do
+			input[i] = 3
+		end
+
+		outputTargets = {-0.7, -0.1, 0.2, 0.5, -0.9}
+
+		errors = {}
+
+		output = neuralNetworks[neuralNetworkIndex]:feedForward(input)
+		
+		--[[
+		print(
+			"Current output: [" ..
+			tonumber(string.format("%.3f", output[1])) ..
+			"] [" ..
+			tonumber(string.format("%.3f", output[2])) ..
+			"] [" ..
+			tonumber(string.format("%.3f", output[3])) ..
+			"] [" ..
+			tonumber(string.format("%.3f", output[4])) ..
+			"] [" ..
+			tonumber(string.format("%.3f", output[5])) ..
+			"]"
+		)
+		--]]
+
+		for i = 1, #(outputTargets) do
+			errors[i] = (output[i] - outputTargets[i])^2
+			totalError = totalError + errors[i]
+		end
+
+		neuralNetworks[neuralNetworkIndex]:backPropagate(outputTargets, learningRate)
+
+		-- Output 3
+
+		for i = 1, inputScannerWidth * inputScannerHeight do
+			input[i] = 1
+		end
+
+		outputTargets = {0.2, 1, -0.2, 0.8, -0.4}
+
+		errors = {}
+
+		output = neuralNetworks[neuralNetworkIndex]:feedForward(input)
+
+		for i = 1, #(outputTargets) do
+			errors[i] = (output[i] - outputTargets[i])^2
+			totalError = totalError + errors[i]
+		end
+
+		neuralNetworks[neuralNetworkIndex]:backPropagate(outputTargets, learningRate)
+
+		-- Output 4
+
+		for i = 1, inputScannerWidth * inputScannerHeight do
+			input[i] = 2
+		end
+
+		outputTargets = {0.1, -1, -1, 1, -0.3}
+
+		errors = {}
+
+		output = neuralNetworks[neuralNetworkIndex]:feedForward(input)
+
+		for i = 1, #(outputTargets) do
+			errors[i] = (output[i] - outputTargets[i])^2
+			totalError = totalError + errors[i]
+		end
+
+		neuralNetworks[neuralNetworkIndex]:backPropagate(outputTargets, learningRate)
+
+		print("Total error: " .. string.format("%.10f", totalError))
 
 		UIDrawer.drawCurrentNeuralNetwork()
 
@@ -1248,6 +1370,9 @@ function UIDrawer.drawTrainingUI()
 	UIDrawer.drawCurrentNeuralNetwork()
 
 	UIDrawer.drawInputScanner(input)
+
+	
+	gui.text(600, 200, neuralNetworkOutputType)
 end
 
 function UIDrawer.drawTrainingText(positionX, positionY, offsetY)
@@ -1333,6 +1458,8 @@ function NeuralNetwork:new(layers)
 	this.layers = layers
 	this.neurons = {}
 	this.neuronsWithoutActivation = {}
+	this.neuronsTarget = {}
+	this.testBias = {}
 	this.biases = {}
 	this.weights = {}
 	this.fitness = 0
@@ -1383,25 +1510,113 @@ function NeuralNetwork:feedForward(inputs)
 end
 
 function NeuralNetwork:backPropagate(targetOutputs, learningRate)
-	self:updateBackPropagateWeightsAndBiases(targetOutputs, learningRate)
+	self:updateBackPropagateWeightsAndBiases2(targetOutputs, learningRate)
+	--self:updateBackPropagateWeightsAndBiases(targetOutputs, learningRate)
+
+	-- Reset target values
+	--[[
+	for i = 1, #(self.layers) do
+		self.neuronsTarget[i] = {}
+
+		for j = 1, self.layers[i] do
+			self.neuronsTarget[i][j] = 0
+		end
+	end
+	--]]
+end
+
+function NeuralNetwork:updateBackPropagateWeightsAndBiases2(targetOutputs, learningRate)
+	local layer = #(self.layers)
+	local targetOutput = 0
+
+	local gamma = {}
+	local weightsDelta = {}
+
+	for i = 1, #(self.layers) do
+		gamma[i] = {}
+
+		for j = 1, self.layers[i] do
+			gamma[i][j] = 0
+		end
+	end
+
+	for i = 2, #(self.layers) do
+		weightsDelta[i - 1] = {}
+		local neuronsInPreviousLayer = self.layers[i - 1]
+
+		for j = 1, #(self.neurons[i]) do
+			weightsDelta[i - 1][j] = {}
+
+			for k = 1, neuronsInPreviousLayer do
+				weightsDelta[i - 1][j][k] = 0
+			end
+		end
+	end
+
+	for layerIndex = 1, #(self.layers) - 1 do
+		for neuronIndex = 1, #(self.neurons[layer]) do
+			-- Calculate output layer
+			if layer == #(self.layers) then
+				targetOutput = targetOutputs[neuronIndex]
+
+				local error = self.neurons[layer][neuronIndex] - targetOutput
+				gamma[layer][neuronIndex] = error * self:activateDerivative(self.neuronsWithoutActivation[layer][neuronIndex])
+			
+				for weightIndex = 1, #(self.weights[layer - 1][neuronIndex]) do
+					weightsDelta[layer - 1][neuronIndex][weightIndex] = gamma[layer][neuronIndex] * self.neurons[layer - 1][weightIndex]
+				end
+			-- Calculate hidden layers
+			else
+				gamma[layer][neuronIndex] = 0
+
+				for gammaIndex = 1, #(gamma[layer + 1]) do
+					gamma[layer][neuronIndex] = gamma[layer + 1][gammaIndex] * self.weights[layer][gammaIndex][neuronIndex] -- gammaIndex and neuronIndex backwards?
+				end
+
+				gamma[layer][neuronIndex] = gamma[layer][neuronIndex] * self:activateDerivative(self.neuronsWithoutActivation[layer][neuronIndex])
+
+				for weightIndex = 1, #(self.weights[layer - 1][neuronIndex]) do
+					weightsDelta[layer - 1][neuronIndex][weightIndex] = gamma[layer][neuronIndex] * self.neurons[layer - 1][weightIndex]
+				end
+			end
+
+			for weightIndex = 1, #(self.weights[layer - 1][neuronIndex]) do
+				self.weights[layer - 1][neuronIndex][weightIndex] = self.weights[layer - 1][neuronIndex][weightIndex] - weightsDelta[layer - 1][neuronIndex][weightIndex] * learningRate
+			end
+
+			self.biases[layer][neuronIndex] = self.biases[layer][neuronIndex] - (gamma[layer][neuronIndex] * self.neurons[layer][neuronIndex]) * learningRate
+
+			--[[
+			for weightIndex = 1, #(self.weights[layer - 1][neuronIndex]) do
+				self:updateBackPropagateWeight(learningRate, layer, neuronIndex, weightIndex, targetOutput)
+			end
+
+			self:updateBackPropagateBias(learningRate, layer, neuronIndex, targetOutput)
+			--]]
+		end
+
+		layer = layer - 1
+	end
 end
 
 function NeuralNetwork:updateBackPropagateWeightsAndBiases(targetOutputs, learningRate)
-	for outputIndex = 1, #(self.neurons[#(self.layers)]) do
-		local layer = #(self.layers)
-		local targetOutput = targetOutputs[outputIndex]
+	local layer = #(self.layers)
+	local targetOutput = 0
 
-		for layerIndex = 1, #(self.layers) - 1 do
-			for neuronIndex = 1, #(self.neurons[layer]) do
-				for weightIndex = 1, #(self.weights[layer - 1][neuronIndex]) do
-					self:updateBackPropagateWeight(learningRate, layer, neuronIndex, weightIndex, targetOutput)
-				end
-
-				self:updateBackPropagateBias(learningRate, layer, neuronIndex, targetOutput)
+	for layerIndex = 1, #(self.layers) - 1 do
+		for neuronIndex = 1, #(self.neurons[layer]) do
+			if (layer == #(self.layers)) then
+				targetOutput = targetOutputs[neuronIndex]
 			end
 
-			layer = layer - 1
+			for weightIndex = 1, #(self.weights[layer - 1][neuronIndex]) do
+				self:updateBackPropagateWeight(learningRate, layer, neuronIndex, weightIndex, targetOutput)
+			end
+
+			self:updateBackPropagateBias(learningRate, layer, neuronIndex, targetOutput)
 		end
+
+		layer = layer - 1
 	end
 end
 
@@ -1409,7 +1624,7 @@ function NeuralNetwork:updateBackPropagateWeight(learningRate, layer, neuronInde
 	local weight = self.weights[layer - 1][neuronIndex][weightIndex]
 
 	local newWeight = self:calculateBackPropagateWeight(
-		weight, learningRate, layer, neuronIndex, targetOutput
+		weight, learningRate, layer, neuronIndex, weightIndex, targetOutput
 	)
 
 	self.weights[layer - 1][neuronIndex][weightIndex] = newWeight
@@ -1425,40 +1640,74 @@ function NeuralNetwork:updateBackPropagateBias(learningRate, layer, neuronIndex,
 	self.biases[layer][neuronIndex] = newBias
 end
 
-function NeuralNetwork:calculateBackPropagateWeight(weight, learningRate, layer, neuronIndex, targetOutput)
-	return weight - learningRate * self:calculateBackPropagateWeightRatio(layer, neuronIndex, targetOutput)
+function NeuralNetwork:calculateBackPropagateWeight(weight, learningRate, layer, neuronIndex, weightIndex, targetOutput)
+	local ratio = self:calculateBackPropagateWeightRatio(layer, neuronIndex, weightIndex, targetOutput)
+
+	self.neuronsTarget[layer - 1][weightIndex] = self.neuronsTarget[layer - 1][weightIndex] + ratio
+
+	return weight - learningRate * ratio
 end
 
 function NeuralNetwork:calculateBackPropagateBias(bias, learningRate, layer, neuronIndex, targetOutput)
 	return bias - learningRate * self:calculateBackPropagateBiasRatio(bias, layer, neuronIndex, targetOutput)
 end
 
-function NeuralNetwork:calculateBackPropagateWeightRatio(layer, neuronIndex, targetOutput)
+function NeuralNetwork:calculateBackPropagateWeightRatio(layer, neuronIndex, weightIndex, targetOutput)
 	return (
-		self:calculateBackPropagateChainA(layer, neuronIndex, targetOutput) *
+		self:calculateBackPropagateChainAWeight(layer, neuronIndex, weightIndex, targetOutput) *
 		self:calculateBackPropagateChainB(layer, neuronIndex) *
-		self:calculateBackPropagateChainCWeight(layer, neuronIndex)
+		self:calculateBackPropagateChainCWeight(layer, neuronIndex, weightIndex)
 	)
 end
 
 function NeuralNetwork:calculateBackPropagateBiasRatio(bias, layer, neuronIndex, targetOutput)
 	return (
-		self:calculateBackPropagateChainA(layer, neuronIndex, targetOutput) *
+		self:calculateBackPropagateChainABias(layer, neuronIndex, targetOutput) *
 		self:calculateBackPropagateChainB(layer, neuronIndex) *
 		self:calculateBackPropagateChainCBias(bias)
 	)
 end
 
-function NeuralNetwork:calculateBackPropagateChainA(layer, neuronIndex, targetOutput)
-	return 2 * (self.neurons[layer][neuronIndex] - targetOutput)
+function NeuralNetwork:calculateBackPropagateChainAWeight(layer, neuronIndex, weightIndex, targetOutput)
+	local result = 0
+
+	--[[
+	if (layer == #(self.layers)) then
+		result = 2 * (self.neurons[layer][neuronIndex] - targetOutput)
+	else
+		result = 2 * (self.neurons[layer][neuronIndex] - self.neuronsTarget[layer][neuronIndex])
+	end
+
+	--self.neuronsTarget[layer - 1][weightIndex] = self.neuronsTarget[layer - 1][weightIndex] + result
+	--]]
+
+	if (layer == #(self.layers)) then
+		result = self.neurons[layer][neuronIndex] - targetOutput
+	else
+		--result = 2 * (self.neurons[layer][neuronIndex] - self.neuronsTarget[layer][neuronIndex])
+	end
+
+	return result
+end
+
+function NeuralNetwork:calculateBackPropagateChainABias(layer, neuronIndex, targetOutput)
+	local result = 0
+
+	if (layer == #(self.layers)) then
+		result = 2 * (self.neurons[layer][neuronIndex] - targetOutput)
+	else
+		result = self.neuronsTarget[layer][neuronIndex]
+	end
+
+	return result
 end
 
 function NeuralNetwork:calculateBackPropagateChainB(layer, neuronIndex)
 	return self:activateDerivative(self.neuronsWithoutActivation[layer][neuronIndex])
 end
 
-function NeuralNetwork:calculateBackPropagateChainCWeight(layer, neuronIndex)
-	return self.neurons[layer - 1][neuronIndex]
+function NeuralNetwork:calculateBackPropagateChainCWeight(layer, neuronIndex, weightIndex)
+	return self.neurons[layer - 1][weightIndex]
 end
 
 function NeuralNetwork:calculateBackPropagateChainCBias(bias)
@@ -1645,10 +1894,12 @@ function NeuralNetwork:initNeurons()
 	for i = 1, #(self.layers) do
 		self.neurons[i] = {}
 		self.neuronsWithoutActivation[i] = {}
+		self.neuronsTarget[i] = {}
 
 		for j = 1, self.layers[i] do
 			self.neurons[i][j] = 0
 			self.neuronsWithoutActivation[i][j] = 0
+			self.neuronsTarget[i][j] = 0
 		end
 	end
 end
@@ -1745,11 +1996,14 @@ function ReplayMemory:new(maxSize)
 end
 
 function ReplayMemory:addReplay(state, actions, reward, nextState)
+	-- Traverse backwards if replay memory is full
 	if self.size >= self.maxSize then
-		return
+		for i = 2, #(self.replays) do
+			self.replays[i - 1] = self.replays[i]
+		end
 	end
 
-	self.size = self.size + 1
+	self.size = math.min(self.size + 1, self.maxSize)
 
 	self.replays[self.size] = {}
 
@@ -1760,7 +2014,7 @@ function ReplayMemory:addReplay(state, actions, reward, nextState)
 end
 
 function ReplayMemory:getBatch(size)
-	size = math.max(self.size)
+	size = math.min(self.size, size)
 	
 	local replays = {}
 
@@ -1771,13 +2025,77 @@ function ReplayMemory:getBatch(size)
 	return replays
 end
 
+function ReplayMemory:save(fileName)
+	local saveFile = io.open(fileName, "w")
+
+	saveFile:write(self.size, "\n")
+
+	for replayIndex = 1, #(self.replays) do
+		for stateIndex = 1, #(self.replays[replayIndex]["State"]) do
+			saveFile:write(self.replays[replayIndex]["State"][stateIndex], "\n")
+		end
+
+		for actionIndex = 1, #(self.replays[replayIndex]["Actions"]) do
+			saveFile:write(self.replays[replayIndex]["Actions"][actionIndex], "\n")
+		end
+
+		saveFile:write(self.replays[replayIndex]["Reward"], "\n")
+
+		for nextStateIndex = 1, #(self.replays[replayIndex]["Next State"]) do
+			saveFile:write(self.replays[replayIndex]["Next State"][nextStateIndex], "\n")
+		end
+	end
+
+	io.close(saveFile)
+end
+
+function ReplayMemory:load(fileName)
+	local lines = {}
+	local index = 1
+
+	for line in io.lines(fileName) do 
+		lines[#lines + 1] = line
+	end
+
+	self.size = tonumber(lines[index])
+	index = index + 1
+
+	for replayIndex = 1, self.size do
+		self.replays[replayIndex] = {}
+
+		self.replays[replayIndex]["State"] = {}
+		self.replays[replayIndex]["Actions"] = {}
+		self.replays[replayIndex]["Next State"] = {}
+
+		for stateIndex = 1, neuralNetworkLayers[1] do
+			self.replays[replayIndex]["State"][stateIndex] = tonumber(lines[index])
+			index = index + 1
+		end
+
+		for actionIndex = 1, neuralNetworkLayers[#(neuralNetworkLayers)] do
+			self.replays[replayIndex]["Actions"][actionIndex] = tonumber(lines[index])
+			index = index + 1
+		end
+
+		self.replays[replayIndex]["Reward"] = tonumber(lines[index])
+		index = index + 1
+
+		for nextStateIndex = 1, neuralNetworkLayers[1] do
+			self.replays[replayIndex]["Next State"][nextStateIndex] = tonumber(lines[index])
+			index = index + 1
+		end
+	end
+end
+
 -- START PROGRAM
 --runTraining()
 
---runQLearningTraining()
+runQLearningTraining()
 
-runBackPropagationTest()
+--runBackPropagationTest()
 
 --increaseNeuralNetwork(saveFileName, {inputScannerWidth * inputScannerHeight, 100, 100, 5})
 
 --runWorldGridCreator()
+
+-- Replay memory opslaan en laden
