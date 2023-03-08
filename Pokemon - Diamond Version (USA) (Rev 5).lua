@@ -8,11 +8,12 @@ input = {}
 inputScannerBorderString = "---------------------"
 inputScannerWidth = 5
 inputScannerHeight = 5
+debugStartInput = nil
 output = {}
 
 neuralNetworks = {}
-neuralNetworkLayers = {inputScannerWidth * inputScannerHeight, 80, 80, 8}
-neuralNetworkLayersBackPropagationTest = {inputScannerWidth * inputScannerHeight, 20, 8}
+neuralNetworkLayers = {inputScannerWidth * inputScannerHeight, 40, 40, 8}
+neuralNetworkLayersBackPropagationTest = {inputScannerWidth * inputScannerHeight, 20, 20, 20, 8}
 neuralNetworkIndex = 1
 neuralNetworkCount = 20
 goodNeuralNetworkCount = 5
@@ -31,6 +32,9 @@ totalRuns = 0
 runTime = 1000
 runTimer = 0
 evolution = 0
+totalErrors = {}
+totalErrorsIndex = 1
+maxTotalErrors = 10
 
 mutationChance = 40
 mutationStrength = 10
@@ -70,12 +74,12 @@ worldGridCreatorY = 856
 worldGridCreatorIndex = 0
 worldGridSaveFileName = "World Grid.txt"
 unExploredTileInput = 0
-exploredTileInput = 1
-wallInput = 2
+exploredTileInput = 0.25
+wallInput = 0.5
 wallColor = "White"
-npcInput = 3
+npcInput = 0.75
 npcColor = "Yellow"
-grassInput = 4
+grassInput = 1
 grassColor = "DarkGreen"
 
 stuckTime = 40
@@ -181,6 +185,12 @@ function arrayLength3D(array)
 	return length
 end
 
+function copyTable(fromTable, toTable)
+	for i, value in pairs(fromTable) do
+		toTable[i] = value
+	end
+end
+
 function getJoypadTableFromOutput(output)
 	local joypadTable = {
 		Left = false,
@@ -215,6 +225,7 @@ end
 
 function getRandomOutput()
 	local joypadTable = {}
+
 	local buttonCount = 8
 	local randomIndex = math.random(1, buttonCount)
 
@@ -405,7 +416,7 @@ end
 
 function initNeuralNetworksForBackPropagationTest()
 	neuralNetworks[1] = NeuralNetwork:new(neuralNetworkLayersBackPropagationTest)
-	neuralNetworks[1]:mutate(100, mutationStrength * 5)
+	neuralNetworks[1]:mutate(100, mutationStrength * 10)
 end
 
 function initReplayMemory()
@@ -444,7 +455,7 @@ function initTrainingLoop()
 		playerRepetitiveStuckPositionY = playerPositionY
 
 		-- Start position is explored
-		worldGrid[playerPositionX][playerPositionY] = 1
+		worldGrid[playerPositionX][playerPositionY] = exploredTileInput
 	end
 end
 
@@ -493,7 +504,7 @@ function updatePlayerMovementFitness()
 	-- If player moved to a new grid tile, add fitness
 	if isPlayerInGridRange() then
 		if worldGrid[playerPositionX][playerPositionY] == 0 then
-			worldGrid[playerPositionX][playerPositionY] = 1
+			worldGrid[playerPositionX][playerPositionY] = exploredTileInput
 			fitnessPlayerMoving = fitnessPlayerMoving + 0.01
 		end
 	end
@@ -530,20 +541,20 @@ function updateWorldGrid()
 
 			-- If there already is an NPC, don't change the grid value
 			if
-				gridValue ~= 3
+				gridValue ~= npcInput
 			then
 				-- Wall
 				if playerWalkingTowardsTileType == 2 then
-					worldGrid[gridPositionX][gridPositionY] = 2
+					worldGrid[gridPositionX][gridPositionY] = wallInput
 
 				-- Grass
 				elseif playerTileType == 2 then
-					worldGrid[playerPositionX][playerPositionY] = 4
+					worldGrid[playerPositionX][playerPositionY] = grassInput
 				end
 
 				-- NPCs
 				if isPlayerInConversation then
-					worldGrid[gridPositionX][gridPositionY] = 3
+					worldGrid[gridPositionX][gridPositionY] = npcInput
 				end
 			end
 		end
@@ -566,7 +577,7 @@ function updateRunTimer()
 	end
 end
 
-function updateStuckTimer()
+function updateStuckTimer(previousInput, previousOutput, reward, input)
 	if not isStuckTimerActive then
 		return
 	end
@@ -577,6 +588,11 @@ function updateStuckTimer()
 		if neuralNetworkType == "Default" then
 			nextRun()
 		elseif neuralNetworkType == "Q Learning" then
+			-- Add a decreased reward when stuck in a wall
+			reward = reward - 1
+
+			replayMemory:addReplay(previousInput, previousOutput, reward, input)
+
 			nextRunQLearning()
 		end
 	end
@@ -632,10 +648,10 @@ function getNeuralNetworkInputFromGrid(width, height)
 			if isInWorldGridRange(gridIndexX, gridIndexY) then
 				input[inputIndex] = worldGrid[gridIndexX][gridIndexY]
 			else
-				input[inputIndex] = 2
+				input[inputIndex] = wallInput
 			end
 
-			input[inputIndex] = math.tanh(input[inputIndex])
+			input[inputIndex] = input[inputIndex]
 
 			inputIndex = inputIndex + 1
 		end
@@ -840,7 +856,7 @@ function nextRunQLearning()
 		neuralNetworks[i].fitness = 0
 	end
 
-	-- Debugging
+	-- Debugging replays
 	if debugMode then
 		if 
 			debugReplay ~= nil and
@@ -859,7 +875,7 @@ function nextRunQLearning()
 
 	savestate.loadslot(saveState)
 
-	trainingLoopQLearning()
+	--trainingLoopQLearning()
 end
 
 function nextEvolution()
@@ -1191,9 +1207,13 @@ function trainingLoopQLearning()
 
 		--updateWorldGrid()
 
-		local previousInput = input
-		local previousOutput = output
-		local reward = math.tanh(getCurrentReward())
+		local previousInput = {}
+		copyTable(input, previousInput)
+
+		local previousOutput = {}
+		copyTable(output, previousOutput)
+
+		local reward = getCurrentReward()
 
 		addFitness(neuralNetworks[neuralNetworkIndex])
 
@@ -1202,9 +1222,18 @@ function trainingLoopQLearning()
 
 		input = getNeuralNetworkInputFromGrid(inputScannerWidth, inputScannerHeight)
 
+		-- Setting the start input value for debugging
+		if debugMode then
+			if debugStartInput == nil then
+				debugStartInput = {}
+
+				copyTable(input, debugStartInput)
+			end
+		end
+
 		if runTimer > 0 then
 			if reward > 0 then
-				if neuralNetworkOutputType == "Random" then
+				--if neuralNetworkOutputType == "Random" then
 					--print("Saving in replay memory:")
 					--print(previousOutput)
 					replayMemory:addReplay(previousInput, previousOutput, reward, input)
@@ -1216,18 +1245,21 @@ function trainingLoopQLearning()
 
 					--print(replayMemory.replays[1]["Actions"])
 
-					local replays = replayMemory:getBatch(6)
+					local replays = replayMemory:getBatch(30)
 
 					--print(replays[1]["Actions"])
 
-					local targetOutputs = {0, 0, 0, 0, 0, 0, 0, 0, 0}
-					local totalErrors = {0, 0, 0, 0, 0, 0, 0, 0, 0}
-					local discountFactor = 0.9
+					local targetOutputs = {0, 0, 0, 0, 0, 0, 0, 0}
+					local totalReplaysError = 0
+					local discountFactor = 0.99
 					local learningRate = 0.01
 					
 					for i = 1, #(replays) do
-						local outputPolicy = neuralNetworks[neuralNetworkIndex]:feedForward(replays[i]["State"])
-						local outputTarget = neuralNetworks[neuralNetworkIndex + 1]:feedForward(replays[i]["Next State"])
+						local outputPolicy = {}
+						copyTable(neuralNetworks[neuralNetworkIndex]:feedForward(replays[i]["State"]), outputPolicy)
+
+						local outputTarget = {}
+						copyTable(neuralNetworks[neuralNetworkIndex + 1]:feedForward(replays[i]["Next State"]), outputTarget)
 
 						--print("Output Policy:")
 						--print(outputPolicy)
@@ -1258,27 +1290,53 @@ function trainingLoopQLearning()
 						for errorIndex = 1, #(outputPolicy) do
 							-- Update only the max Q value
 							if errorIndex == maxAction then
+
+								--if 
+								--print("Error Index: " .. errorIndex)
+
 								--outputErrors[errorIndex] = (replays[i]["Reward"] * 100 * outputTarget[errorIndex]) - outputPolicy[errorIndex]
 								--outputErrors[errorIndex] = replays[i]["Reward"] * outputTarget[errorIndex] - outputPolicy[errorIndex]
 								--outputErrors[errorIndex] = -1 + (replays[i]["Reward"] + (0.99 * outputTarget[errorIndex])) - outputPolicy[errorIndex]
 								outputErrors[errorIndex] = (1 - learningRate) * outputPolicy[errorIndex] + learningRate * maxQValue
 
-								totalErrors[errorIndex] = totalErrors[errorIndex] + outputErrors[errorIndex]
+								totalReplaysError = totalReplaysError + math.abs(outputErrors[errorIndex])
 
 								targetOutputs[errorIndex] = outputPolicy[errorIndex] + outputErrors[errorIndex]
 							else
 								targetOutputs[errorIndex] = outputPolicy[errorIndex]
 							end
+
+							--targetOutputs[errorIndex] = math.tanh(targetOutputs[errorIndex])
 						end
 
-						--print(targetOutputs)
 						neuralNetworks[neuralNetworkIndex]:backPropagate(targetOutputs, 0.001)
 					end
 
-					--print("Total Error: " .. totalErrors[1] + totalErrors[2] + totalErrors[3] + totalErrors[4] + totalErrors[5])
+					-- Total errors calculation
+					local totalError = 0
+					local totalErrorAverage = 0
+					local totalErrorSize = 0
 
-					--neuralNetworks[neuralNetworkIndex]:backPropagate(targetOutputs, 0.01)
-				end
+					if totalErrorsIndex < maxTotalErrors then
+						totalErrors[totalErrorsIndex] = totalReplaysError
+						totalErrorsIndex = totalErrorsIndex + 1
+					else
+						totalErrorsIndex = 1						
+					end
+
+					for i = 1, maxTotalErrors do
+						if totalErrors[i] ~= nil then
+							totalError = totalError + totalErrors[i]
+							totalErrorSize = totalErrorSize + 1
+						end
+					end
+
+					totalErrorAverage = totalError / totalErrorSize
+
+					if (debugMode) then
+						print("Total Error: " .. string.format("%.2f", totalErrorAverage))
+					end
+				--end
 			end
 		end
 
@@ -1286,13 +1344,13 @@ function trainingLoopQLearning()
 			if math.random(0, 100) >= test then
 				output = getRandomOutput()
 
-				neuralNetworks[neuralNetworkIndex].neurons[#(neuralNetworks[neuralNetworkIndex].layers)] = output
+				copyTable(output, neuralNetworks[neuralNetworkIndex].neurons[#(neuralNetworks[neuralNetworkIndex].layers)])
 
 				neuralNetworkOutputType = "Random"
 			else
-				output = neuralNetworks[neuralNetworkIndex]:feedForward(input)
+				copyTable(neuralNetworks[neuralNetworkIndex]:feedForward(input), output)
 
-				print(output)
+				--print(output)
 
 				neuralNetworkOutputType = "Policy"
 			end
@@ -1318,7 +1376,7 @@ function trainingLoopQLearning()
 
 		updateRunTimer()
 
-		updateStuckTimer()
+		updateStuckTimer(previousInput, previousOutput, reward, input)
 
 		UIDrawer.drawTrainingUI()
 
@@ -1341,11 +1399,14 @@ function trainingLoopBackPropagationTest()
 			input[i] = 0
 		end
 
-		local outputTargets = {-0.5, 0, 0.5, 1, -1, 1, 0, 0.5}
+		local outputTargets = {-0.5, -0.5, -0.5, -1, -1, 0, -1, -0.5}
 
 		local errors = {}
 
 		output = neuralNetworks[neuralNetworkIndex]:feedForward(input)
+
+		--print(output)
+		
 		
 		--[[
 		print(
@@ -1376,7 +1437,7 @@ function trainingLoopBackPropagationTest()
 			input[i] = 0.2
 		end
 
-		outputTargets = {-0.7, -0.1, 0.2, 0.5, -0.9, 1, 0.5, -0.9}
+		outputTargets = {0.7, 0.1, 0.2, 0.5, 0.9, 1, 0.5, 0.9}
 
 		errors = {}
 
@@ -1411,7 +1472,7 @@ function trainingLoopBackPropagationTest()
 			input[i] = 1
 		end
 
-		outputTargets = {0.2, 1, -0.2, 0.8, -0.4, 0.2, 0.5, -0.9}
+		outputTargets = {-0.2, -1, -0.2, -0.8, -0.4, -0.2, -0.5, -0.9}
 
 		errors = {}
 
@@ -1430,7 +1491,7 @@ function trainingLoopBackPropagationTest()
 			input[i] = 0.7
 		end
 
-		outputTargets = {0.1, -1, -1, 1, -0.3, 1, 1, 1}
+		outputTargets = {0.1, 1, 1, 1, 0.3, 1, 1, 1}
 
 		errors = {}
 
@@ -1544,7 +1605,8 @@ function NeuralNetwork:new(layers)
 	setmetatable(this, self)
 	self.__index = self
 
-	this.layers = layers
+	this.layers = {}
+	copyTable(layers, this.layers)
 	this.neurons = {}
 	this.neuronsWithoutActivation = {}
 	this.neuronsTarget = {}
@@ -1594,6 +1656,7 @@ function NeuralNetwork:feedForward(inputs)
 			else
 				self.neurons[layerIndex][neuronIndex] = value + self.biases[layerIndex][neuronIndex]
 			end
+			
 
 			self.neuronsWithoutActivation[layerIndex][neuronIndex] = value + self.biases[layerIndex][neuronIndex]
 		end
@@ -1656,6 +1719,7 @@ function NeuralNetwork:updateBackPropagateWeightsAndBiases2(targetOutputs, learn
 
 				local error = self.neurons[layer][neuronIndex] - targetOutput
 				--local error = (targetOutput - self.neurons[layer][neuronIndex])^2
+				--local error = (self.neurons[layer][neuronIndex] - targetOutput)^2
 				totalError = totalError + math.abs(error)
 				gamma[layer][neuronIndex] = error * self:activateDerivative(self.neuronsWithoutActivation[layer][neuronIndex])
 			
@@ -1686,6 +1750,25 @@ function NeuralNetwork:updateBackPropagateWeightsAndBiases2(targetOutputs, learn
 
 		layer = layer - 1
 	end
+
+	-- Debugging to see if the error gets lower
+	--[[
+	if debugMode then
+		local currentTotalError = 0
+		local errors = {}
+
+		self:feedForward(self.neurons[1])
+
+		for i = 1, #(targetOutputs) do
+			errors[i] = (self.neurons[#(self.layers)][i] - targetOutputs[i])^2
+			currentTotalError = currentTotalError + errors[i]
+		end
+
+		--print(currentTotalError - totalError)
+		--print("Current: " .. currentTotalError)
+		--print("Previous: " .. totalError)
+	end
+	--]]
 end
 
 function NeuralNetwork:updateBackPropagateWeightsAndBiases(targetOutputs, learningRate)
@@ -2088,7 +2171,7 @@ function ReplayMemory:addReplay(state, actions, reward, nextState)
 	-- Traverse backwards if replay memory is full
 	if self.size >= self.maxSize then
 		for i = 2, #(self.replays) do
-			self.replays[i - 1] = self.replays[i]
+			self.replays[i - 1] = self:cloneReplay(i)
 		end
 	end
 
@@ -2216,9 +2299,9 @@ end
 -- START PROGRAM
 --runTraining()
 
---runQLearningTraining()
+runQLearningTraining()
 
-runBackPropagationTest()
+--runBackPropagationTest()
 
 --increaseNeuralNetwork(saveFileName, {inputScannerWidth * inputScannerHeight, 100, 100, 5})
 
