@@ -12,7 +12,7 @@ debugStartInput = nil
 output = {}
 
 neuralNetworks = {}
-neuralNetworkLayers = {inputScannerWidth * inputScannerHeight, 40, 40, 8}
+neuralNetworkLayers = {inputScannerWidth * inputScannerHeight, 30, 4}
 neuralNetworkLayersBackPropagationTest = {inputScannerWidth * inputScannerHeight, 20, 20, 20, 8}
 neuralNetworkIndex = 1
 neuralNetworkCount = 20
@@ -107,7 +107,7 @@ trainingTextPositionY = 5
 trainingTextOffsetY = 20
 
 replayMemory = nil
-replayMemorySize = 100
+replayMemorySize = 1000
 replayMemorySaveFileName = "Replay Memory.txt"
 
 --print(joypad.getimmediate())
@@ -223,10 +223,55 @@ function getJoypadTableFromOutput(output)
 	return joypadTable
 end
 
+function getSimpleJoypadTableFromOutput(output)
+	local joypadTable = {
+		Left = false,
+		Right = false,
+		Up = false,
+		Down = false,
+		B = false
+	}
+
+	local maxAction = nil
+	local maxValue = -math.huge
+
+	for index, value in ipairs(output) do
+		if value > maxValue then
+			maxAction = index
+			maxValue = value
+		end
+	end
+
+	if (maxAction == 1) then joypadTable = { Left = true , B = true }
+	elseif (maxAction == 2) then joypadTable = { Right = true, B = true }
+	elseif (maxAction == 3) then joypadTable = { Up = true, B = true }
+	elseif (maxAction == 4) then joypadTable = { Down = true, B = true  }
+	end
+
+	return joypadTable
+end
+
 function getRandomOutput()
 	local joypadTable = {}
 
 	local buttonCount = 8
+	local randomIndex = math.random(1, buttonCount)
+
+	for i = 1, buttonCount do
+		if (i == randomIndex) then
+			joypadTable[i] = 1
+		else
+			joypadTable[i] = -1
+		end
+	end
+
+	return joypadTable
+end
+
+function getSimpleRandomOutput()
+	local joypadTable = {}
+
+	local buttonCount = 4
 	local randomIndex = math.random(1, buttonCount)
 
 	for i = 1, buttonCount do
@@ -462,12 +507,16 @@ end
 function trainingLoopPlayerMoved()
 	-- Player moved one step
 	if playerMovedOneStep() then
-		updatePlayerRepetitiveStuck()
+		if not updatePlayerRepetitiveStuck() then
+			return false
+		end
 
 		updatePlayerMovementFitness()
 
 		stuckTimer = 0
 	end
+
+	return true
 end
 
 function updatePlayerPreviousPosition()
@@ -483,10 +532,14 @@ function updatePlayerRepetitiveStuck()
 	-- If player stays within a small distance go next run
 	if playerRepetitiveStuckCurrentCount >= playerRepetitiveStuckMaxCount then
 		if manhattanDistance(playerPositionX, playerPositionY, playerRepetitiveStuckPositionX, playerRepetitiveStuckPositionY) <= playerRepetitiveStuckDistance then
+			if debugMode then
+				print("Next run due to being in the same area for too long")
+			end
+
 			if neuralNetworkType == "Default" then
-				nextRun()
+				return false
 			elseif neuralNetworkType == "Q Learning" then
-				nextRunQLearning()
+				return false
 			end
 		else
 			playerRepetitiveStuckPositionX = playerPositionX
@@ -496,6 +549,8 @@ function updatePlayerRepetitiveStuck()
 	end
 
 	playerRepetitiveStuckCurrentCount = playerRepetitiveStuckCurrentCount + 1
+
+	return true
 end
 
 function updatePlayerMovementFitness()
@@ -503,9 +558,11 @@ function updatePlayerMovementFitness()
 
 	-- If player moved to a new grid tile, add fitness
 	if isPlayerInGridRange() then
-		if worldGrid[playerPositionX][playerPositionY] == 0 then
+		if worldGrid[playerPositionX][playerPositionY] == unExploredTileInput then
 			worldGrid[playerPositionX][playerPositionY] = exploredTileInput
 			fitnessPlayerMoving = fitnessPlayerMoving + 0.01
+		elseif worldGrid[playerPositionX][playerPositionY] == exploredTileInput then
+			fitnessPlayerMoving = fitnessPlayerMoving - 0.3
 		end
 	end
 end
@@ -570,32 +627,46 @@ function updateRunTimer()
 
 	if runTimer >= runTime then
 		if neuralNetworkType == "Default" then
-			nextRun()
+			return false
 		elseif neuralNetworkType == "Q Learning" then
-			nextRunQLearning()
+			if debugMode then
+				print("Next run due to timer ending")
+			end
+
+			return false
 		end
 	end
+
+	return true
 end
 
 function updateStuckTimer(previousInput, previousOutput, reward, input)
 	if not isStuckTimerActive then
-		return
+		return true
 	end
 
 	stuckTimer = stuckTimer + 1
 
 	if stuckTimer >= stuckTime then
 		if neuralNetworkType == "Default" then
-			nextRun()
+			return false
 		elseif neuralNetworkType == "Q Learning" then
-			-- Add a decreased reward when stuck in a wall
-			reward = reward - 1
+			if debugMode then
+				print("Next run due to being stuck")
+			end
 
-			replayMemory:addReplay(previousInput, previousOutput, reward, input)
+			if neuralNetworkOutputType == "Random" then
+				-- Add a decreased reward when stuck in a wall
+				reward = reward - 1
 
-			nextRunQLearning()
+				replayMemory:addReplay(previousInput, previousOutput, reward, input)
+			end
+
+			return false
 		end
 	end
+
+	return true
 end
 
 function getNeuralNetworkColorFromValue(value)
@@ -755,6 +826,14 @@ function sortNeuralNetworks(neuralNetworks)
 	return neuralNetworksSorted
 end
 
+function nextRunByType()
+	if neuralNetworkType == "Default" then
+		nextRun()
+	elseif neuralNetworkType == "Q Learning" then
+		nextRunQLearning()
+	end
+end
+
 function nextRun()
 	totalRuns = totalRuns + 1
 
@@ -875,7 +954,7 @@ function nextRunQLearning()
 
 	savestate.loadslot(saveState)
 
-	--trainingLoopQLearning()
+	trainingLoopQLearning()
 end
 
 function nextEvolution()
@@ -1203,7 +1282,11 @@ function trainingLoopQLearning()
 	while true do
 		initTrainingLoop()
 
-		trainingLoopPlayerMoved()
+		if not trainingLoopPlayerMoved() then
+			nextRunByType()
+
+			break
+		end
 
 		--updateWorldGrid()
 
@@ -1232,8 +1315,8 @@ function trainingLoopQLearning()
 		end
 
 		if runTimer > 0 then
-			if reward > 0 then
-				--if neuralNetworkOutputType == "Random" then
+			if reward ~= 0 then
+				if neuralNetworkOutputType == "Random" then
 					--print("Saving in replay memory:")
 					--print(previousOutput)
 					replayMemory:addReplay(previousInput, previousOutput, reward, input)
@@ -1245,14 +1328,14 @@ function trainingLoopQLearning()
 
 					--print(replayMemory.replays[1]["Actions"])
 
-					local replays = replayMemory:getBatch(30)
+					local replays = replayMemory:getBatch(20)
 
 					--print(replays[1]["Actions"])
 
-					local targetOutputs = {0, 0, 0, 0, 0, 0, 0, 0}
+					local targetOutputs = {0, 0, 0, 0}
 					local totalReplaysError = 0
-					local discountFactor = 0.99
-					local learningRate = 0.01
+					local discountFactor = 0.2
+					local learningRate = 0.8
 					
 					for i = 1, #(replays) do
 						local outputPolicy = {}
@@ -1309,6 +1392,19 @@ function trainingLoopQLearning()
 							--targetOutputs[errorIndex] = math.tanh(targetOutputs[errorIndex])
 						end
 
+						--[[
+						if replays[i]["Reward"] < 0 then
+							print("Reward: " .. replays[i]["Reward"])
+							print("Max Q Value: " .. maxQValue)
+							print("Current:")
+							print(outputPolicy)
+							print("Errors:")
+							print(outputErrors)
+							print("Target:")
+							print(targetOutputs)
+						end
+						--]]
+
 						neuralNetworks[neuralNetworkIndex]:backPropagate(targetOutputs, 0.001)
 					end
 
@@ -1336,13 +1432,13 @@ function trainingLoopQLearning()
 					if (debugMode) then
 						print("Total Error: " .. string.format("%.2f", totalErrorAverage))
 					end
-				--end
+				end
 			end
 		end
 
 		if not isInputEqual(input, previousInput) then
 			if math.random(0, 100) >= test then
-				output = getRandomOutput()
+				output = getSimpleRandomOutput()
 
 				copyTable(output, neuralNetworks[neuralNetworkIndex].neurons[#(neuralNetworks[neuralNetworkIndex].layers)])
 
@@ -1350,13 +1446,13 @@ function trainingLoopQLearning()
 			else
 				copyTable(neuralNetworks[neuralNetworkIndex]:feedForward(input), output)
 
-				--print(output)
+				print(output)
 
 				neuralNetworkOutputType = "Policy"
 			end
 		end
 
-		test = test + 0.1
+		test = test + 0.02
 
 		if test >= 100 then
 			print("Updating target network")
@@ -1369,14 +1465,22 @@ function trainingLoopQLearning()
 		end
 
 		if not isInputEqual(input, previousInput) then
-			joypadTable = getJoypadTableFromOutput(output)
+			joypadTable = getSimpleJoypadTableFromOutput(output)
 		end
 
 		setJoypadInput(joypadTable)
 
-		updateRunTimer()
+		if not updateRunTimer() then
+			nextRunByType()
 
-		updateStuckTimer(previousInput, previousOutput, reward, input)
+			break
+		end
+
+		if not updateStuckTimer(previousInput, previousOutput, reward, input) then
+			nextRunByType()
+
+			break
+		end
 
 		UIDrawer.drawTrainingUI()
 
