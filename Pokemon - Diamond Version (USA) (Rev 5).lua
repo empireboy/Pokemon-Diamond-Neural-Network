@@ -4,16 +4,36 @@ NeuralNetwork = {}
 UIDrawer = {}
 ReplayMemory = {}
 
+combinedInput = {}
 input = {}
+combinedPreviousInput = {}
+previousInput = {}
+previousInputHistory = {}
+previousInputHistory2 = {}
 inputScannerBorderString = "---------------------"
 inputScannerWidth = 5
 inputScannerHeight = 5
 debugStartInput = nil
 output = {}
+previousOutput = {}
+
+--[[
+
+	Neural Network Inputs:
+	1. Input Scanner (width x height)
+	2. Is Player in Battle (0 or 1)
+	3. Player Pokemon Health (binary)
+	4. Opponent Pokemon Health (binary)
+	5. Battle Screen ID (binary)
+	6. Battle Move ID (binary)
+	7. 1..6 Again for Previous Inputs (history)
+
+--]]
 
 neuralNetworks = {}
-neuralNetworkLayers = {inputScannerWidth * inputScannerHeight, 30, 30, 4}
-neuralNetworkLayersBackPropagationTest = {inputScannerWidth * inputScannerHeight, 60, 60, 60, 8}
+neuralNetworkLayers = {(inputScannerWidth * inputScannerHeight + 1 + 10 + 10 + 10 + 9) * 2, 800, 6}
+neuralNetworkLayersBackPropagationTest = {inputScannerWidth * inputScannerHeight, 1000, 8}
+neuralNetworkLayersBackPropagationTestFromReplayMemory = {inputScannerWidth * inputScannerHeight, 20, 20, 4}
 neuralNetworkIndex = 1
 neuralNetworkCount = 20
 goodNeuralNetworkCount = 5
@@ -26,15 +46,24 @@ neuralNetworkPositiveColor = "green"
 neuralNetworkPositiveColorHigh = "#00FF00"
 neuralNetworkType = "Q Learning"
 neuralNetworkOutputType = "Random"
+neuralNetworkDropoutPercentage = 30
+isDropoutActive = true
+neuralNetworkLearningRate = 0.01
+neuralNetworkWeightDecay = 0.001
 
 bestRun = -1
 totalRuns = 0
-runTime = 1000
+runTime = 3000
 runTimer = 0
 evolution = 0
 totalErrors = {}
 totalErrorsIndex = 1
-maxTotalErrors = 10
+maxTotalErrors = 50
+totalErrorsSaveFileName = "Total Errors.txt"
+totalCorrectActions = {}
+totalCorrectActionsIndex = 1
+maxTotalCorrectActions = 200
+totalCorrectSaveFileName = "Total Correct.txt"
 
 mutationChance = 40
 mutationStrength = 30
@@ -48,6 +77,8 @@ playerPositionXAddress = 0x291D3C
 playerPositionYAddress = 0x291D44
 playerPositionXAddressForWrite = 0x291D48
 playerPositionYAddressForWrite = 0x291D50
+playerPositionXAddressForWriteVisual = 0x34FC1E
+playerPositionYAddressForWriteVisual = 0x34FC26
 previousPlayerPositionX = 0
 previousPlayerPositionY = 0
 playerRotation = 0
@@ -60,17 +91,34 @@ playerRepetitiveStuckPositionX = 0
 playerRepetitiveStuckPositionY = 0
 playerRepetitiveStuckDistance = 3
 playerRepetitiveStuckCurrentCount = 0
-playerRepetitiveStuckMaxCount = 10
+playerRepetitiveStuckMaxCount = 30
 isPlayerRepetitiveStuckActive = true
 isPlayerInConversation = false
 playerConversationAddress = 0x39E544
+isPlayerInBattle = false
+playerInBattleAddress = 0x1F6484
+playerPokemonHealth = 0
+playerPokemonHealthAddress = 0x2B587C
+playerPokemonHealthMaxLength = 10
+playerPokemonOpponentHealth = 0
+previousPlayerPokemonOpponentHealth = 0
+playerPokemonOpponentHealthAddress = 0x2B593C
+playerBattleScreenID = 0
+playerBattleScreenIDAddress = 0x26014E
+playerBattleScreenIDMaxLength = 10
+playerBattleMoveID = 0
+playerBattleMoveIDAddress = 0x2B5BA4
+playerBattleMoveIDMaxLength = 9
 
 worldGrid = {}
 worldGridWidth = 1000
 worldGridHeight = 1000
 worldGridCreatorTimer = 0
 worldGridCreatorX = 100
-worldGridCreatorY = 856
+worldGridCreatorY = 850
+worldGridCreatorTillX = 115
+worldGridCreatorTillY = 851
+worldGridCreatorXStart = worldGridCreatorX
 worldGridCreatorIndex = 0
 worldGridSaveFileName = "World Grid.txt"
 unExploredTileInput = 0
@@ -82,28 +130,29 @@ npcColor = "Yellow"
 grassInput = 1
 grassColor = "DarkGreen"
 
-stuckTime = 40
-isRunTimerActive = true
+stuckTime = 3 -- 40
 stuckTimer = 0
 isStuckTimerActive = true
+isRunTimerActive = true
 
 bestFitness = 0
 fitnessPlayerMoving = 0
 fitnessPlayerSpeed = 0
+fitnessPlayerBattle = 0
 
 explorationExploitation = 0
-explorationExploitationIncrease = 0.02
+explorationExploitationIncrease = 0.01
 
-saveState = 5
+saveState = 9
 minSaveState = 5
 maxSaveState = 8
+isRandomSaveStateActive = false
 
 saveFileName = "Best Neural Network.txt"
 
 replayAfterEvolution = false
 replayTime = 150
 replayFormat = "Replay #%s"
-debugReplay = nil
 
 extraBorderWidth = 360
 
@@ -114,9 +163,17 @@ trainingTextOffsetY = 20
 replayMemory = nil
 replayMemorySize = 1000
 replayMemorySaveFileName = "Replay Memory.txt"
+batchLearnTime = 30
+batchLearnTimer = 0
+isBatchLearnTimerActive = true
+batchSize = 20
+debugReplay = nil
+saveReplayTime = 10
+saveReplayTimer = 0
+isSaveReplayTimerActive = true
 
-bellmanDiscountFactor = 0.2
-bellmanLearningRate = 0.8
+bellmanDiscountFactor = 0.8
+bellmanLearningRate = 0.1
 
 --print(joypad.getimmediate())
 
@@ -167,6 +224,18 @@ function manhattanDistance(x1, y1, x2, y2)
 	return math.abs(x1 - x2) + math.abs(y1 - y2)
 end
 
+function uniform(low, high)
+	return low + (high - low) * math.random()
+end
+
+function normal(mean, std)
+	local u1 = math.random()
+	local u2 = math.random()
+	local z = math.sqrt(-2 * math.log(u1)) * math.cos(2 * math.pi * u2)
+
+	return mean + z * std
+end
+
 function deltaTime()
 	return 1 / client.get_approx_framerate()
 end
@@ -196,6 +265,68 @@ end
 function copyTable(fromTable, toTable)
 	for i, value in pairs(fromTable) do
 		toTable[i] = value
+	end
+end
+
+function averageTables3D(table)
+	local result = {}
+	for i = 1, #table[1] do
+		result[i] = {}
+		for j = 1, #table[1][i] do
+			result[i][j] = 0
+			for k = 1, #table do
+				result[i][j] = result[i][j] + table[k][i][j]
+			end
+			result[i][j] = result[i][j] / #table
+		end
+	end
+	return result
+end
+
+function averageTables4D(table)
+	local result = {}
+	for i = 1, #table[1] do
+		result[i] = {}
+		for j = 1, #table[1][i] do
+			result[i][j] = {}
+			for l = 1, #table[1][i][j] do
+				result[i][j][l] = 0
+				for k = 1, #table do
+					result[i][j][l] = result[i][j][l] + table[k][i][j][l]
+				end
+				result[i][j][l] = result[i][j][l] / #table
+			end
+		end
+	end
+	return result
+end
+
+function binary(value, length)
+	local binaryString = ""
+
+	while value > 0 do
+		local remainder = value % 2
+
+		binaryString = tostring(remainder) .. binaryString
+		value = math.floor(value / 2)
+	end
+
+	if length then
+		if binaryString ~= "" then
+			binaryString = string.format("%0" .. tostring(length) .. "d", tonumber(binaryString))
+		else
+			binaryString = string.rep("0", length)
+		end
+	end
+
+	return binaryString
+end
+
+function insertBinary(toTable, binaryString)
+	for i = 1, #binaryString do
+		local binaryValue = tonumber(string.sub(binaryString, i, i))
+
+		table.insert(toTable, binaryValue)
 	end
 end
 
@@ -231,6 +362,37 @@ function getJoypadTableFromOutput(output)
 	return joypadTable
 end
 
+function getJoypadTableFromOutputWithoutWalk(output)
+	local joypadTable = {
+		Left = false,
+		Right = false,
+		Up = false,
+		Down = false,
+		B = false,
+		A = false
+	}
+
+	local maxAction = nil
+	local maxValue = -math.huge
+
+	for index, value in ipairs(output) do
+		if value > maxValue then
+			maxAction = index
+			maxValue = value
+		end
+	end
+
+	if (maxAction == 1) then joypadTable = { Left = true , B = true }
+	elseif (maxAction == 2) then joypadTable = { Right = true, B = true }
+	elseif (maxAction == 3) then joypadTable = { Up = true, B = true }
+	elseif (maxAction == 4) then joypadTable = { Down = true, B = true  }
+	elseif (maxAction == 5) then joypadTable = { B = true  }
+	elseif (maxAction == 6) then joypadTable = { A = true  }
+	end
+
+	return joypadTable
+end
+
 function getSimpleJoypadTableFromOutput(output)
 	local joypadTable = {
 		Left = false,
@@ -259,10 +421,9 @@ function getSimpleJoypadTableFromOutput(output)
 	return joypadTable
 end
 
-function getRandomOutput()
+function getRandomOutput(buttonCount)
 	local joypadTable = {}
 
-	local buttonCount = 8
 	local randomIndex = math.random(1, buttonCount)
 
 	for i = 1, buttonCount do
@@ -299,6 +460,14 @@ function fileExists(fileName)
 	if saveFile then saveFile:close() end
 
 	return saveFile ~= nil
+end
+
+function saveLine(fileName, value)
+	local saveFile = io.open(fileName, "a")
+
+	saveFile:write(value, "\n")
+
+	io.close(saveFile)
 end
 
 function isInputEqual(input1, input2)
@@ -367,6 +536,18 @@ function readFromMemory()
 	playerWalkingTowardsTileType = memory.read_s32_le(playerWalkingTowardsTileTypeAddress)
 	playerTileType = memory.read_s16_le(playerTileTypeAddress)
 	isPlayerInConversation = numberToBool(memory.read_s32_le(playerConversationAddress))
+	isPlayerInBattle = numberToBool(memory.read_s32_le(playerInBattleAddress))
+	playerPokemonHealth = memory.read_s32_le(playerPokemonHealthAddress)
+	playerPokemonOpponentHealth = memory.read_s32_le(playerPokemonOpponentHealthAddress)
+	playerBattleScreenID = memory.read_s16_le(playerBattleScreenIDAddress)
+	playerBattleMoveID = memory.read_s16_le(playerBattleMoveIDAddress)
+
+	if not isPlayerInBattle then
+		playerPokemonHealth = 0
+		playerPokemonOpponentHealth = 0
+		playerBattleScreenID = 0
+		playerBattleMoveID = 0
+	end
 end
 
 function clamp(value, min, max)
@@ -392,13 +573,35 @@ function playerMovedOneStep()
 end
 
 function saveWorldGrid(fileName)
+	local lines = {}
+	-- Start index at 3 to skip width and height
+	local index = 3
+	local saveFileAlreadyExists = fileExists(worldGridSaveFileName)
+
+	if saveFileAlreadyExists then
+		for line in io.lines(fileName) do 
+			lines[#lines + 1] = line
+		end
+	end
+
 	local saveFile = io.open(fileName, "w")
 
 	saveFile:write(worldGridWidth, "\n")
 	saveFile:write(worldGridHeight, "\n")
 
-	for i = 1, #(worldGrid) do
-		for j = 1, #(worldGrid[i]) do
+	for i = 1, #worldGrid do
+		for j = 1, #worldGrid[i] do
+			-- Overwrite the tile from the save file, so new tiles will be added
+			if saveFileAlreadyExists then
+				local tileFromSave = tonumber(lines[index])
+
+				if tileFromSave ~= 0 then
+					worldGrid[i][j] = tileFromSave
+				end
+
+				index = index + 1
+			end
+
 			saveFile:write(worldGrid[i][j], "\n")
 		end
 	end
@@ -469,7 +672,16 @@ end
 
 function initNeuralNetworksForBackPropagationTest()
 	neuralNetworks[1] = NeuralNetwork:new(neuralNetworkLayersBackPropagationTest)
-	neuralNetworks[1]:mutate(100, mutationStrength * 10)
+	neuralNetworks[1]:mutate(100, mutationStrength)
+end
+
+function initNeuralNetworksForBackPropagationTestFromReplayMemory()
+	neuralNetworks[1] = NeuralNetwork:new(neuralNetworkLayersBackPropagationTestFromReplayMemory)
+	neuralNetworks[2] = NeuralNetwork:new(neuralNetworkLayersBackPropagationTestFromReplayMemory)
+
+	neuralNetworks[1]:mutate(100, mutationStrength)
+
+	neuralNetworks[1]:copy(neuralNetworks[2])
 end
 
 function initReplayMemory()
@@ -562,15 +774,23 @@ function updatePlayerRepetitiveStuck()
 end
 
 function updatePlayerMovementFitness()
-	fitnessPlayerSpeed = fitnessPlayerSpeed + (stuckTime - stuckTimer) * 0.0001
+	fitnessPlayerSpeed = fitnessPlayerSpeed + (stuckTime - stuckTimer) * 0.01
 
 	-- If player moved to a new grid tile, add fitness
 	if isPlayerInGridRange() then
 		if worldGrid[playerPositionX][playerPositionY] == unExploredTileInput then
 			worldGrid[playerPositionX][playerPositionY] = exploredTileInput
-			fitnessPlayerMoving = fitnessPlayerMoving + 0.01
+			fitnessPlayerMoving = fitnessPlayerMoving + 1
+
+			if debugMode and neuralNetworkOutputType == "Policy" then
+				addCorrectAction(true)
+			end
 		elseif worldGrid[playerPositionX][playerPositionY] == exploredTileInput then
-			fitnessPlayerMoving = fitnessPlayerMoving - 0.004
+			fitnessPlayerMoving = fitnessPlayerMoving - 0.8
+
+			if debugMode and neuralNetworkOutputType == "Policy" then
+				addCorrectAction(false)
+			end
 		end
 	end
 end
@@ -634,15 +854,11 @@ function updateRunTimer()
 	runTimer = runTimer + 1
 
 	if runTimer >= runTime then
-		if neuralNetworkType == "Default" then
-			return false
-		elseif neuralNetworkType == "Q Learning" then
-			if debugMode then
-				print("Next run due to timer ending")
-			end
-
-			return false
+		if debugMode then
+			print("Next run due to timer ending")
 		end
+
+		return false
 	end
 
 	return true
@@ -656,18 +872,150 @@ function updateStuckTimer()
 	stuckTimer = stuckTimer + 1
 
 	if stuckTimer >= stuckTime then
-		if neuralNetworkType == "Default" then
-			return false
-		elseif neuralNetworkType == "Q Learning" then
-			if debugMode then
-				print("Next run due to being stuck")
-			end
+		stuckTimer = 0
 
-			return false
+		if debugMode and not isPlayerInBattle then
+			print("Next run due to being stuck")
 		end
+
+		return false
 	end
 
 	return true
+end
+
+function updateBatchLearnTimer()
+	if not isBatchLearnTimerActive then
+		return true
+	end
+
+	batchLearnTimer = batchLearnTimer + 1
+
+	if batchLearnTimer >= batchLearnTime then
+		batchLearnTimer = 0
+
+		return false
+	end
+
+	return true
+end
+
+function updateSaveReplayTimer()
+	if not isSaveReplayTimerActive then
+		return true
+	end
+
+	saveReplayTimer = saveReplayTimer + 1
+
+	if saveReplayTimer >= saveReplayTime then
+		saveReplayTimer = 0
+
+		return false
+	end
+
+	return true
+end
+
+function updateExplorationExploitation()
+	if math.random(0, 100) >= explorationExploitation then
+		output = getRandomOutput(6)
+
+		copyTable(output, neuralNetworks[neuralNetworkIndex].neurons[#(neuralNetworks[neuralNetworkIndex].layers)])
+
+		neuralNetworkOutputType = "Random"
+	else
+		copyTable(neuralNetworks[neuralNetworkIndex]:feedForward(combinedInput), output)
+
+		neuralNetworkOutputType = "Policy"
+
+		--print(output)
+	end
+
+	joypadTable = getJoypadTableFromOutputWithoutWalk(output)
+end
+
+function trainOnBatch(batchSize)
+	if runTimer <= 0 then
+		return
+	end
+
+	-- Save first replay for debugging
+	if debugReplay == nil then
+		debugReplay = replayMemory:cloneReplay(1)
+	end
+
+	local replays = replayMemory:getBatch(batchSize)
+
+	local weightsDeltaGradients = {}
+	local gammaGradients = {}
+
+	local targetOutputs = {}
+	local totalReplaysError = 0
+					
+	for i = 1, #(replays) do
+		local outputPolicy = {}
+		copyTable(neuralNetworks[neuralNetworkIndex]:feedForward(replays[i]["State"]), outputPolicy)
+
+		local outputTarget = {}
+		copyTable(neuralNetworks[neuralNetworkIndex + 1]:feedForward(replays[i]["Next State"]), outputTarget)
+
+		local outputErrors = {}
+
+		local maxTargetAction = maxValueInTable(outputTarget)
+
+		local maxQValue = maxQValue(replays[i]["Reward"], bellmanDiscountFactor, maxTargetAction)
+
+		local maxReplayAction, maxReplayIndex = maxValueInTable(replays[i]["Actions"])
+
+		for errorIndex = 1, #(outputPolicy) do
+			-- Update only the max Q value
+			if errorIndex == maxReplayIndex then
+				outputErrors[errorIndex] = bellmanEquation(bellmanLearningRate, outputPolicy[errorIndex], maxQValue)
+				--outputErrors[errorIndex] = math.min(math.abs(outputErrors[errorIndex]), 1) * (outputErrors[errorIndex]/math.abs(outputErrors[errorIndex]))
+
+				totalReplaysError = totalReplaysError + math.abs(maxQValue - outputErrors[errorIndex])
+
+				targetOutputs[errorIndex] = outputErrors[errorIndex]
+				--targetOutputs[errorIndex] = outputPolicy[errorIndex] + outputErrors[errorIndex]
+			else
+				targetOutputs[errorIndex] = outputPolicy[errorIndex]
+			end
+		end
+
+		-- Compute the average absolute error
+		local totalError = 0
+
+		for i = 1, #targetOutputs do
+			totalError = totalError + math.abs(targetOutputs[i])
+		end
+
+		local avgError = totalError / #targetOutputs
+
+		-- Scale the output errors
+		for i = 1, #targetOutputs do
+			targetOutputs[i] = targetOutputs[i] / avgError
+		end
+						
+		--[[
+		if replays[i]["Reward"] < 0 then
+			print("Reward: " .. replays[i]["Reward"])
+			print("Max Q Value: " .. maxQValue)
+			print("Current:")
+			print(outputPolicy)
+			print("Errors:")
+			print(outputErrors)
+			print("Target:")
+			print(targetOutputs)
+		end
+		--]]
+
+		replayMemory:updatePriority(replays[i]["Index"], math.abs(maxQValue - outputErrors[maxReplayIndex]))
+						
+		neuralNetworks[neuralNetworkIndex]:backPropagate(targetOutputs, neuralNetworkLearningRate)
+	end
+
+	-- Total errors calculation
+	addError(totalReplaysError)
 end
 
 function saveReplay(policyNeuralNetwork, targetNeuralNetwork, input, previousInput, previousOutput, reward, discountFactor, learningRate)
@@ -675,8 +1023,16 @@ function saveReplay(policyNeuralNetwork, targetNeuralNetwork, input, previousInp
 		return
 	end
 
-	if reward == 0 then
-		return
+	if #input <= 0 then
+		return "Cannot save replay since input is nil or empty"
+	end
+
+	if #previousInput <= 0 then
+		return "Cannot save replay since previous input is nil or empty"
+	end
+
+	if #previousOutput <= 0 then
+		return "Cannot save replay since previous output is nil or empty"
 	end
 
 	local outputPolicy = {}
@@ -694,6 +1050,76 @@ function saveReplay(policyNeuralNetwork, targetNeuralNetwork, input, previousInp
 	local priority = math.abs(bellmanEquation(learningRate, outputPolicy[maxActionIndex], maxQValue))
 
 	replayMemory:addReplay(previousInput, previousOutput, reward, input, priority)
+end
+
+function addError(error)
+	if totalErrorsIndex < maxTotalErrors then
+		totalErrors[totalErrorsIndex] = error
+		totalErrorsIndex = totalErrorsIndex + 1
+	else
+		totalErrorsIndex = 1						
+	end
+end
+
+function printAverageError()
+	if #(totalErrors) <= 0 then
+		return nil
+	end
+
+	local totalError = 0
+	local totalErrorAverage = 0
+	local totalErrorSize = 0
+
+	for i = 1, maxTotalErrors do
+		if totalErrors[i] ~= nil then
+			totalError = totalError + totalErrors[i]
+			totalErrorSize = totalErrorSize + 1
+		end
+	end
+
+	totalErrorAverage = totalError / totalErrorSize
+
+	-- Only keep two decimal places
+	totalErrorAverage = math.floor(totalErrorAverage * 100) / 100
+
+	print("Total Error: " .. totalErrorAverage)
+
+	return totalErrorAverage
+end
+
+function addCorrectAction(correctAction)
+	if totalCorrectActionsIndex < maxTotalCorrectActions then
+		totalCorrectActions[totalCorrectActionsIndex] = correctAction
+		totalCorrectActionsIndex = totalCorrectActionsIndex + 1
+	else
+		totalCorrectActionsIndex = 1						
+	end
+end
+
+function printCorrectActions()
+	if #(totalCorrectActions) <= 0 then
+		return nil
+	end
+
+	local totalCorrect = 0
+	local totalCorrectPercentage = 0
+
+	for i = 1, maxTotalCorrectActions do
+		if totalCorrectActions[i] ~= nil then
+			if totalCorrectActions[i] == true then
+				totalCorrect = totalCorrect + 1
+			end
+		end
+	end
+
+	totalCorrectPercentage = (totalCorrect / #(totalCorrectActions)) * 100
+
+	-- Only keep two decimal places
+	totalCorrectPercentage = math.floor(totalCorrectPercentage * 100) / 100
+
+	print("Total Correct: " .. totalCorrectPercentage .. "%")
+
+	return totalCorrectPercentage
 end
 
 function maxQValue(reward, discountFactor, maxAction)
@@ -715,7 +1141,8 @@ function maxValueInTable(table)
 end
 
 function bellmanEquation(learningRate, policyQValue, maxQValue)
-	return (1 - learningRate) * policyQValue + learningRate * maxQValue
+	return policyQValue + learningRate * (maxQValue - policyQValue)
+	--return (1 - learningRate) * policyQValue + learningRate * maxQValue
 end
 
 function getNeuralNetworkColorFromValue(value)
@@ -984,8 +1411,24 @@ function nextRunQLearning()
 		neuralNetworks[i].fitness = 0
 	end
 
-	-- Debugging replays
 	if debugMode then
+		-- Debugging total error
+		local averageError = printAverageError()
+
+		-- Save average error if it's added
+		if averageError ~= nil then
+			saveLine(totalErrorsSaveFileName, averageError)
+		end
+
+		-- Debugging correct percentage
+		local correctPercentage = printCorrectActions()
+
+		-- Save correct percentage if it's added
+		if correctPercentage ~= nil then
+			saveLine(totalCorrectSaveFileName, correctPercentage)
+		end
+
+		-- Debugging replays
 		if 
 			debugReplay ~= nil and
 			replayMemory.size < replayMemory.maxSize 
@@ -1006,7 +1449,10 @@ function nextRunQLearning()
 	loadWorldGrid(worldGridSaveFileName)
 
 	-- Load between a random save state so that it learns multiple inputs at the same time
-	saveState = math.random(minSaveState, maxSaveState)
+	if isRandomSaveStateActive then
+		saveState = math.random(minSaveState, maxSaveState)
+	end
+
 	savestate.loadslot(saveState)
 
 	trainingLoopQLearning()
@@ -1046,7 +1492,7 @@ function addFitness(neuralNetwork)
 end
 
 function getCurrentReward()
-	return fitnessPlayerMoving + fitnessPlayerSpeed
+	return fitnessPlayerMoving + fitnessPlayerSpeed + fitnessPlayerBattle
 end
 
 function mutate()
@@ -1093,7 +1539,7 @@ function onExit()
 end
 
 function runWorldGridCreator()
-	math.randomseed(os.time())
+	math.randomseed(os.clock()*1000000)
 
 	event.onexit(onExit)
 
@@ -1122,7 +1568,7 @@ function runWorldGridCreator()
 end
 
 function runTraining()
-	math.randomseed(os.time())
+	math.randomseed(os.clock()*1000000)
 
 	event.onexit(onExit)
 
@@ -1156,7 +1602,7 @@ function runTraining()
 end
 
 function runQLearningTraining()
-	math.randomseed(os.time())
+	math.randomseed(os.clock()*1000000)
 
 	event.onexit(onExit)
 
@@ -1190,7 +1636,7 @@ function runQLearningTraining()
 end
 
 function runBackPropagationTest()
-	math.randomseed(os.time())
+	math.randomseed(os.clock()*1000000)
 
 	event.onexit(onExit)
 
@@ -1206,6 +1652,64 @@ function runBackPropagationTest()
 	trainingLoopBackPropagationTest()
 end
 
+function runBackPropagationTestFromReplayMemory()
+	math.randomseed(os.clock()*1000000)
+
+	event.onexit(onExit)
+
+	console.clear()
+
+	client.SetClientExtraPadding(extraBorderWidth, 0, 0, 0)
+
+	gui.use_surface("client")
+	gui.clearGraphics()
+
+	initReplayMemory();
+
+	initNeuralNetworksForBackPropagationTestFromReplayMemory()
+
+	trainingLoopBackPropagationTestFromReplayMemory()
+end
+
+function runBackPropagationTestFromReplayMemoryOutputsOnly()
+	math.randomseed(os.clock()*1000000)
+
+	event.onexit(onExit)
+
+	console.clear()
+
+	client.SetClientExtraPadding(extraBorderWidth, 0, 0, 0)
+
+	gui.use_surface("client")
+	gui.clearGraphics()
+
+	initReplayMemory();
+
+	initNeuralNetworksForBackPropagationTestFromReplayMemory()
+
+	trainingLoopBackPropagationTestFromReplayMemoryOutputsOnly()
+end
+
+function runInputScannerOnly()
+	event.onexit(onExit)
+
+	console.clear()
+
+	client.SetClientExtraPadding(extraBorderWidth, 0, 0, 0)
+
+	memory.usememorydomain("Main RAM")
+
+	gui.use_surface("client")
+	gui.clearGraphics()
+
+	readFromMemory()
+
+	initWorldGrid()
+	loadWorldGrid(worldGridSaveFileName)
+
+	trainingLoopInputScannerOnly()
+end
+
 function worldGridCreatorLoop()
 	while true do
 		gui.clearGraphics()
@@ -1218,21 +1722,29 @@ function worldGridCreatorLoop()
 
 			memory.write_s32_le(playerPositionXAddressForWrite, worldGridCreatorX)
 			memory.write_s32_le(playerPositionYAddressForWrite, worldGridCreatorY)
+			memory.write_s16_le(playerPositionXAddressForWriteVisual, worldGridCreatorX)
+			memory.write_s16_le(playerPositionYAddressForWriteVisual, worldGridCreatorY)
 		elseif worldGridCreatorIndex == 10 * 1 then
 			savestate.loadslot(saveState)
 
 			memory.write_s32_le(playerPositionXAddressForWrite, worldGridCreatorX)
 			memory.write_s32_le(playerPositionYAddressForWrite, worldGridCreatorY)
+			memory.write_s16_le(playerPositionXAddressForWriteVisual, worldGridCreatorX)
+			memory.write_s16_le(playerPositionYAddressForWriteVisual, worldGridCreatorY)
 		elseif worldGridCreatorIndex == 10 * 2 then
 			savestate.loadslot(saveState)
 
 			memory.write_s32_le(playerPositionXAddressForWrite, worldGridCreatorX)
 			memory.write_s32_le(playerPositionYAddressForWrite, worldGridCreatorY)
+			memory.write_s16_le(playerPositionXAddressForWriteVisual, worldGridCreatorX)
+			memory.write_s16_le(playerPositionYAddressForWriteVisual, worldGridCreatorY)
 		elseif worldGridCreatorIndex == 10 * 3 then
 			savestate.loadslot(saveState)
 
 			memory.write_s32_le(playerPositionXAddressForWrite, worldGridCreatorX)
 			memory.write_s32_le(playerPositionYAddressForWrite, worldGridCreatorY)
+			memory.write_s16_le(playerPositionXAddressForWriteVisual, worldGridCreatorX)
+			memory.write_s16_le(playerPositionYAddressForWriteVisual, worldGridCreatorY)
 		end
 
 		-- Directional player movement
@@ -1285,10 +1797,10 @@ function worldGridCreatorLoop()
 
 			print("[" .. worldGridCreatorX .. "][" .. worldGridCreatorY .. "]")
 
-			if worldGridCreatorX >= 122 then
-				if worldGridCreatorY < 892 then
+			if worldGridCreatorX >= worldGridCreatorTillX then
+				if worldGridCreatorY < worldGridCreatorTillY then
 					worldGridCreatorY = worldGridCreatorY + 1
-					worldGridCreatorX = 100
+					worldGridCreatorX = worldGridCreatorXStart
 				else
 					saveWorldGrid(worldGridSaveFileName)
 					break;
@@ -1342,147 +1854,120 @@ function trainingLoopQLearning()
 			break
 		end
 
+		local playerPokemonOpponentHealthDiff = playerPokemonOpponentHealth - previousPlayerPokemonOpponentHealth
+
+		previousPlayerPokemonOpponentHealth = playerPokemonOpponentHealth
+
+		if playerPokemonOpponentHealthDiff < 0 then
+			fitnessPlayerBattle = fitnessPlayerBattle + math.abs(playerPokemonOpponentHealthDiff) * 0.01
+
+			if debugMode and neuralNetworkOutputType == "Policy" then
+				addCorrectAction(true)
+			end
+		else
+			fitnessPlayerBattle = fitnessPlayerBattle - math.abs(playerPokemonOpponentHealthDiff) * 0.01
+		end
+
 		--updateWorldGrid()
 
-		local previousInput = {}
+		local reward = getCurrentReward()
+
 		copyTable(input, previousInput)
 
-		local previousOutput = {}
-		copyTable(output, previousOutput)
+		if not isInputEqual(input, previousInputHistory) then
+			copyTable(previousInputHistory, previousInputHistory2)
+			copyTable(input, previousInputHistory)
+		end
 
-		local reward = getCurrentReward()
+		previousOutput = {}
+		copyTable(output, previousOutput)
 
 		addFitness(neuralNetworks[neuralNetworkIndex])
 
 		fitnessPlayerMoving = 0
 		fitnessPlayerSpeed = 0
+		fitnessPlayerBattle = 0
 
 		input = getNeuralNetworkInputFromGrid(inputScannerWidth, inputScannerHeight)
+
+		-- Insert all different inputs
+		table.insert(input, boolToNumber(isPlayerInBattle))
+
+		local binaryString = binary(playerPokemonHealth, playerPokemonHealthMaxLength)
+		insertBinary(input, binaryString)
+
+		binaryString = binary(playerPokemonOpponentHealth, playerPokemonHealthMaxLength)
+		insertBinary(input, binaryString)
+
+		binaryString = binary(playerBattleScreenID, playerBattleScreenIDMaxLength)
+		insertBinary(input, binaryString)
+
+		binaryString = binary(playerBattleMoveID, playerBattleMoveIDMaxLength)
+		insertBinary(input, binaryString)
+
+		-- Make sure previous inputs are initialized to zero
+		if runTimer <= 0 then
+			previousInputHistory = {}
+			previousInputHistory2 = {}
+
+			for i = 1, #input do
+				table.insert(previousInputHistory, 0)
+				table.insert(previousInputHistory2, 0)
+			end
+		end
+
+		-- Combine inputs with history of previous inputs
+		combinedInput = {}
+		combinedPreviousInput = {}
+
+		copyTable(input, combinedInput)
+		copyTable(previousInputHistory, combinedPreviousInput)
+
+		for i = 1, #previousInputHistory do
+			table.insert(combinedInput, previousInputHistory[i])
+		end
+
+		for i = 1, #previousInputHistory2 do
+			table.insert(combinedPreviousInput, previousInputHistory2[i])
+		end
+
+		UIDrawer.drawInputScanner(previousInputHistory, 32, 200, inputScannerHeight)
+		UIDrawer.drawInputScanner(previousInputHistory2, 160, 200, inputScannerHeight)
+		UIDrawer.drawInputScanner(combinedInput, 32, 260, inputScannerHeight)
+		UIDrawer.drawInputScanner(combinedPreviousInput, 32, 320, inputScannerHeight)
 
 		-- Setting the start input value for debugging
 		if debugMode then
 			if debugStartInput == nil then
 				debugStartInput = {}
 
-				copyTable(input, debugStartInput)
+				copyTable(combinedInput, debugStartInput)
 			end
 		end
 
-		saveReplay(
-			neuralNetworks[neuralNetworkIndex],
-			neuralNetworks[neuralNetworkIndex + 1],
-			input,
-			previousInput,
-			previousOutput,
-			reward,
-			bellmanDiscountFactor,
-			bellmanLearningRate
-		)
+		if not updateSaveReplayTimer() then
+			local errorMessage = saveReplay(
+				neuralNetworks[neuralNetworkIndex],
+				neuralNetworks[neuralNetworkIndex + 1],
+				combinedInput,
+				combinedPreviousInput,
+				previousOutput,
+				reward,
+				bellmanDiscountFactor,
+				bellmanLearningRate
+			)
 
-		if runTimer > 0 then
-			if reward ~= 0 then
-				--if neuralNetworkOutputType == "Random" then
-
-					--replayMemory:addReplay(previousInput, previousOutput, reward, input, priority)
-
-					-- Save first replay for debugging
-					if debugReplay == nil then
-						debugReplay = replayMemory:cloneReplay(1)
-					end
-
-					local replays = replayMemory:getBatch(20)
-
-					local targetOutputs = {}
-					local totalReplaysError = 0
-					
-					for i = 1, #(replays) do
-						local outputPolicy = {}
-						copyTable(neuralNetworks[neuralNetworkIndex]:feedForward(replays[i]["State"]), outputPolicy)
-
-						local outputTarget = {}
-						copyTable(neuralNetworks[neuralNetworkIndex + 1]:feedForward(replays[i]["Next State"]), outputTarget)
-
-						local outputErrors = {}
-
-						local maxTargetAction = maxValueInTable(outputTarget)
-
-						local maxQValue = maxQValue(replays[i]["Reward"], bellmanDiscountFactor, maxTargetAction)
-
-						local maxReplayAction, maxReplayIndex = maxValueInTable(replays[i]["Actions"])
-
-						for errorIndex = 1, #(outputPolicy) do
-							-- Update only the max Q value
-							if errorIndex == maxReplayIndex then
-								outputErrors[errorIndex] = bellmanEquation(bellmanLearningRate, outputPolicy[errorIndex], maxQValue)
-
-								totalReplaysError = totalReplaysError + math.abs(outputErrors[errorIndex])
-
-								targetOutputs[errorIndex] = outputPolicy[errorIndex] + outputErrors[errorIndex]
-							else
-								targetOutputs[errorIndex] = outputPolicy[errorIndex]
-							end
-						end
-
-						--[[
-						if replays[i]["Reward"] < 0 then
-							print("Reward: " .. replays[i]["Reward"])
-							print("Max Q Value: " .. maxQValue)
-							print("Current:")
-							print(outputPolicy)
-							print("Errors:")
-							print(outputErrors)
-							print("Target:")
-							print(targetOutputs)
-						end
-						--]]
-
-						replayMemory:updatePriority(replays[i]["Index"], math.abs(outputErrors[maxReplayIndex]))
-
-						neuralNetworks[neuralNetworkIndex]:backPropagate(targetOutputs, 0.001)
-					end
-
-					-- Total errors calculation
-					local totalError = 0
-					local totalErrorAverage = 0
-					local totalErrorSize = 0
-
-					if totalErrorsIndex < maxTotalErrors then
-						totalErrors[totalErrorsIndex] = totalReplaysError
-						totalErrorsIndex = totalErrorsIndex + 1
-					else
-						totalErrorsIndex = 1						
-					end
-
-					for i = 1, maxTotalErrors do
-						if totalErrors[i] ~= nil then
-							totalError = totalError + totalErrors[i]
-							totalErrorSize = totalErrorSize + 1
-						end
-					end
-
-					totalErrorAverage = totalError / totalErrorSize
-
-					if (debugMode) then
-						print("Total Error: " .. string.format("%.2f", totalErrorAverage))
-					end
-				--end
+			if errorMessage then
+				print(errorMessage)
 			end
+		end
+
+		if not updateBatchLearnTimer() then
+			trainOnBatch(batchSize)
 		end
 
 		if not isInputEqual(input, previousInput) then
-			if math.random(0, 100) >= explorationExploitation then
-				output = getSimpleRandomOutput()
-
-				copyTable(output, neuralNetworks[neuralNetworkIndex].neurons[#(neuralNetworks[neuralNetworkIndex].layers)])
-
-				neuralNetworkOutputType = "Random"
-			else
-				copyTable(neuralNetworks[neuralNetworkIndex]:feedForward(input), output)
-
-				--print(output)
-
-				neuralNetworkOutputType = "Policy"
-			end
+			updateExplorationExploitation()
 		end
 
 		explorationExploitation = explorationExploitation + explorationExploitationIncrease
@@ -1497,10 +1982,6 @@ function trainingLoopQLearning()
 			explorationExploitation = 0
 		end
 
-		if not isInputEqual(input, previousInput) then
-			joypadTable = getSimpleJoypadTableFromOutput(output)
-		end
-
 		setJoypadInput(joypadTable)
 
 		if not updateRunTimer() then
@@ -1511,15 +1992,41 @@ function trainingLoopQLearning()
 
 		if not updateStuckTimer() then
 			--if neuralNetworkOutputType == "Random" then
+			if not isPlayerInBattle then
 				-- Add a decreased reward when stuck in a wall
-				reward = reward - 0.01
+				fitnessPlayerMoving = fitnessPlayerMoving - 1
 
-				--replayMemory:addReplay(previousInput, previousOutput, reward, input)
+				reward = getCurrentReward()
+
+				if isSaveReplayTimerActive then
+					local errorMessage = saveReplay(
+						neuralNetworks[neuralNetworkIndex],
+						neuralNetworks[neuralNetworkIndex + 1],
+						combinedInput,
+						combinedPreviousInput,
+						previousOutput,
+						reward,
+						bellmanDiscountFactor,
+						bellmanLearningRate
+					)
+
+					if errorMessage then
+						print(saveReplay)
+					end
+				end
+
+				if debugMode and neuralNetworkOutputType == "Policy" then
+					addCorrectAction(false)
+				end
+
+				nextRunByType()
+
+				break
+			else
+				-- Make sure that the neural network continues during a battle
+				updateExplorationExploitation()
+			end
 			--end
-
-			nextRunByType()
-
-			break
 		end
 
 		UIDrawer.drawTrainingUI()
@@ -1534,7 +2041,7 @@ function trainingLoopBackPropagationTest()
 	while true do
 		gui.clearGraphics()
 
-		local learningRate = 0.001
+		local learningRate = 0.005
 		local totalError = 0
 
 		-- Output 1
@@ -1656,14 +2163,158 @@ function trainingLoopBackPropagationTest()
 	end
 end
 
+function trainingLoopBackPropagationTestFromReplayMemory()
+	while true do
+		gui.clearGraphics()
+
+		local replays = replayMemory:getBatch(20)
+
+		local targetOutputs = {}
+		local totalReplaysError = 0
+					
+		for i = 1, #(replays) do
+			local outputPolicy = {}
+			copyTable(neuralNetworks[neuralNetworkIndex]:feedForward(replays[i]["State"]), outputPolicy)
+
+			local outputTarget = {}
+			copyTable(neuralNetworks[neuralNetworkIndex + 1]:feedForward(replays[i]["Next State"]), outputTarget)
+
+			local outputErrors = {}
+
+			local maxTargetAction = maxValueInTable(outputTarget)
+
+			local maxQValue = maxQValue(replays[i]["Reward"], bellmanDiscountFactor, maxTargetAction)
+
+			local maxReplayAction, maxReplayIndex = maxValueInTable(replays[i]["Actions"])
+
+			for errorIndex = 1, #(outputPolicy) do
+				-- Update only the max Q value
+				if errorIndex == maxReplayIndex then
+					outputErrors[errorIndex] = bellmanEquation(bellmanLearningRate, outputPolicy[errorIndex], maxQValue)
+					outputErrors[errorIndex] = math.min(math.abs(outputErrors[errorIndex]), 1) * (outputErrors[errorIndex]/math.abs(outputErrors[errorIndex]))
+
+					totalReplaysError = totalReplaysError + math.abs(maxQValue - outputErrors[errorIndex])
+
+					targetOutputs[errorIndex] = outputErrors[errorIndex]
+				else
+					targetOutputs[errorIndex] = outputPolicy[errorIndex]
+				end
+			end
+
+			replayMemory:updatePriority(replays[i]["Index"], math.abs(maxQValue - outputErrors[maxReplayIndex]))
+
+			neuralNetworks[neuralNetworkIndex]:backPropagate(targetOutputs, 0.005)
+		end
+
+		-- Total errors calculation
+		local totalError = 0
+		local totalErrorAverage = 0
+		local totalErrorSize = 0
+
+		if totalErrorsIndex <= maxTotalErrors then
+			totalErrors[totalErrorsIndex] = totalReplaysError
+			totalErrorsIndex = totalErrorsIndex + 1
+		else
+			totalErrorsIndex = 1						
+		end
+
+		for i = 1, maxTotalErrors do
+			if totalErrors[i] ~= nil then
+				totalError = totalError + totalErrors[i]
+				totalErrorSize = totalErrorSize + 1
+			end
+		end
+
+		totalErrorAverage = totalError / totalErrorSize
+
+		if (debugMode) then
+			print("Total Error: " .. string.format("%.2f", totalErrorAverage))
+		end
+
+		--UIDrawer.drawCurrentNeuralNetwork()
+
+		emu.frameadvance()
+	end
+end
+
+function trainingLoopBackPropagationTestFromReplayMemoryOutputsOnly()
+	while true do
+		gui.clearGraphics()
+
+		local replays = replayMemory:getBatch(20)
+
+		local targetOutputs = {}
+		local totalReplaysError = 0
+
+		local totalError = 0
+		local errors = {}
+					
+		for i = 1, #(replays) do
+			output = neuralNetworks[neuralNetworkIndex]:feedForward(replays[i]["State"])
+
+			neuralNetworks[neuralNetworkIndex]:backPropagate(replays[i]["Actions"], 0.01)
+
+			for i = 1, #(replays[i]["Actions"]) do
+				errors[i] = (output[i] - replays[i]["Actions"][i])^2
+				totalReplaysError = totalReplaysError + errors[i]
+			end
+		end
+
+		--print("Total error: " .. string.format("%.10f", totalReplaysError))
+
+		-- Total errors calculation
+		local totalError = 0
+		local totalErrorAverage = 0
+		local totalErrorSize = 0
+
+		if totalErrorsIndex <= maxTotalErrors then
+			totalErrors[totalErrorsIndex] = totalReplaysError
+			totalErrorsIndex = totalErrorsIndex + 1
+		else
+			totalErrorsIndex = 1						
+		end
+
+		for i = 1, maxTotalErrors do
+			if totalErrors[i] ~= nil then
+				totalError = totalError + totalErrors[i]
+				totalErrorSize = totalErrorSize + 1
+			end
+		end
+
+		totalErrorAverage = totalError / totalErrorSize
+
+		if (debugMode) then
+			print("Total Error: " .. string.format("%.2f", totalErrorAverage))
+		end
+
+		--UIDrawer.drawCurrentNeuralNetwork()
+
+		emu.frameadvance()
+	end
+end
+
+function trainingLoopInputScannerOnly()
+	while true do
+		gui.clearGraphics()
+
+		readFromMemory()
+
+		input = getNeuralNetworkInputFromGrid(inputScannerWidth * 5, inputScannerHeight * 5)
+
+		UIDrawer.drawInputScanner(input, 16, 16)
+
+		emu.frameadvance()
+	end
+end
+
 function UIDrawer.drawTrainingUI()
 	UIDrawer.drawTrainingText(trainingTextPositionX, trainingTextPositionY, trainingTextOffsetY)
 
 	--UIDrawer.drawReplayText(neuralNetworkIndex)
 
-	UIDrawer.drawCurrentNeuralNetwork()
+	--UIDrawer.drawCurrentNeuralNetwork()
 
-	UIDrawer.drawInputScanner(input)
+	UIDrawer.drawInputScanner(input, 240, 5, inputScannerHeight)
 
 	
 	gui.text(600, 200, neuralNetworkOutputType)
@@ -1717,18 +2368,24 @@ function UIDrawer.drawCurrentNeuralNetwork()
 	UIDrawer.drawNeuralNetwork(neuralNetworks[neuralNetworkIndex])
 end
 
-function UIDrawer.drawInputScanner(input, positionX, positionY, tileWidth, tileHeight, outlineColor)
+function UIDrawer.drawInputScanner(input, positionX, positionY, height, tileWidth, tileHeight, outlineColor)
 	positionX = positionX or 240
 	positionY = positionY or 5
+	height = height or math.sqrt(#input)
 	tileWidth = tileWidth or 9
 	tileHeight = tileHeight or 9
 
-	local inputScannerStrings = {}
 	local inputScannerIndex = 1
 	local color
 
-	for i = 1, inputScannerWidth do
-		for j = 1, inputScannerHeight do
+	local width = math.ceil(#input / height)
+
+	for i = 1, width do
+		for j = 1, height do
+			if not input[inputScannerIndex] then
+				break
+			end
+
 			color = getNeuralNetworkColorFromInput(input[inputScannerIndex])
 
 			outlineColorFinal = outlineColor or color
@@ -1794,6 +2451,15 @@ function NeuralNetwork:feedForward(inputs)
 			end
 
 			if layerIndex ~= #(self.neurons) then
+				-- Dropout
+				if isDropoutActive then
+					if math.random() < (neuralNetworkDropoutPercentage / 100) then
+						value = 0
+					else
+						value = value / (1 - (neuralNetworkDropoutPercentage / 100))
+					end
+				end
+
 				self.neurons[layerIndex][neuronIndex] = self:activate(
 					value + self.biases[layerIndex][neuronIndex]
 				)
@@ -1811,21 +2477,140 @@ end
 
 function NeuralNetwork:backPropagate(targetOutputs, learningRate)
 	self:updateBackPropagateWeightsAndBiases2(targetOutputs, learningRate)
-	--self:updateBackPropagateWeightsAndBiases(targetOutputs, learningRate)
+	--self:updateBackPropagateWeightsAndBiases(targetOutputs, learningRate)	
+end
 
-	-- Reset target values
-	--[[
-	for i = 1, #(self.layers) do
-		self.neuronsTarget[i] = {}
+function NeuralNetwork:updateBackPropagateWeightsAndBiases2(targetOutputs, learningRate)
+	local layer = #(self.layers)
+	local targetOutput = 0
 
-		for j = 1, self.layers[i] do
-			self.neuronsTarget[i][j] = 0
+	local totalError = 0
+
+	local gamma = {}
+	local weightsDelta = {}
+
+	local layerCount = #(self.layers)
+	local layerCountWithoutOutput = #(self.layers) - 1
+
+	for i = 1, layerCount do
+		local neuronCount = self.layers[i]
+		gamma[i] = {}
+
+		for j = 1, neuronCount do
+			gamma[i][j] = 0
 		end
+	end
+
+	for i = 2, layerCount do
+		local neuronsInPreviousLayer = self.layers[i - 1]
+		local neuronsInCurrentLayer = #(self.neurons[i])
+
+		weightsDelta[i - 1] = {}
+
+		for j = 1, neuronsInCurrentLayer do
+			weightsDelta[i - 1][j] = {}
+
+			for k = 1, neuronsInPreviousLayer do
+				weightsDelta[i - 1][j][k] = 0
+			end
+		end
+	end
+
+	for layerIndex = 1, layerCountWithoutOutput do
+		local neuronsInLayer = #(self.neurons[layer])
+
+		for neuronIndex = 1, neuronsInLayer do
+			local weightCountInLayer = #(self.weights[layer - 1][neuronIndex])
+
+			-- Calculate output layer
+			if layer == #(self.layers) then
+				targetOutput = targetOutputs[neuronIndex]
+
+				local error = self.neurons[layer][neuronIndex] - targetOutput
+				--local error = (targetOutput - self.neurons[layer][neuronIndex])^2
+				--local error = (self.neurons[layer][neuronIndex] - targetOutput)^2
+				totalError = totalError + math.abs(error)
+				gamma[layer][neuronIndex] = error * self:activateDerivative(self.neuronsWithoutActivation[layer][neuronIndex])
+				
+				for weightIndex = 1, weightCountInLayer do
+					weightsDelta[layer - 1][neuronIndex][weightIndex] = gamma[layer][neuronIndex] * self.neurons[layer - 1][weightIndex]
+				end
+			-- Calculate hidden layers
+			else
+				gamma[layer][neuronIndex] = 0
+
+				local gammaCountInNextLayer = #(gamma[layer + 1])
+
+				for gammaIndex = 1, gammaCountInNextLayer do
+					gamma[layer][neuronIndex] = gamma[layer + 1][gammaIndex] * self.weights[layer][gammaIndex][neuronIndex] -- gammaIndex and neuronIndex backwards?
+				end
+
+				gamma[layer][neuronIndex] = gamma[layer][neuronIndex] * self:activateDerivative(self.neuronsWithoutActivation[layer][neuronIndex])
+
+				for weightIndex = 1, weightCountInLayer do
+					weightsDelta[layer - 1][neuronIndex][weightIndex] = gamma[layer][neuronIndex] * self.neurons[layer - 1][weightIndex]
+				end
+			end
+
+			for weightIndex = 1, weightCountInLayer do
+				--self.weights[layer - 1][neuronIndex][weightIndex] = self.weights[layer - 1][neuronIndex][weightIndex] - weightsDelta[layer - 1][neuronIndex][weightIndex] * learningRate
+				--self.weights[layer - 1][neuronIndex][weightIndex] = self.weights[layer - 1][neuronIndex][weightIndex] - (weightsDelta[layer - 1][neuronIndex][weightIndex] + learningRate * self.weights[layer - 1][neuronIndex][weightIndex]) * learningRate
+				
+				-- Weight Decay
+				local weightDecayValue = neuralNetworkWeightDecay * self.weights[layer - 1][neuronIndex][weightIndex]
+				self.weights[layer - 1][neuronIndex][weightIndex] = self.weights[layer - 1][neuronIndex][weightIndex] - (weightsDelta[layer - 1][neuronIndex][weightIndex] + weightDecayValue) * learningRate
+			end
+
+			self.biases[layer][neuronIndex] = self.biases[layer][neuronIndex] - (gamma[layer][neuronIndex] * self.neurons[layer][neuronIndex]) * learningRate
+		end
+
+		layer = layer - 1
+	end
+
+	-- Debugging to see if the error gets lower
+	--[[
+	if debugMode then
+		local currentTotalError = 0
+		local errors = {}
+
+		self:feedForward(self.neurons[1])
+
+		for i = 1, #(targetOutputs) do
+			errors[i] = (self.neurons[#(self.layers)][i] - targetOutputs[i])^2
+			currentTotalError = currentTotalError + errors[i]
+		end
+
+		--print(currentTotalError - totalError)
+		--print("Current: " .. currentTotalError)
+		--print("Previous: " .. totalError)
 	end
 	--]]
 end
 
-function NeuralNetwork:updateBackPropagateWeightsAndBiases2(targetOutputs, learningRate)
+--[[
+function NeuralNetwork:backPropagate(targetOutputs, learningRate)
+	local weightsDelta, gamma = self:calculateGradients(targetOutputs)
+
+	self:updateBackPropagateWeightsAndBiases2(learningRate, weightsDelta, gamma)
+end
+
+function NeuralNetwork:backPropagateFromGradients(learningRate, weightsDelta, gamma)
+	self:updateBackPropagateWeightsAndBiases2(learningRate, weightsDelta, gamma)
+end
+
+function NeuralNetwork:updateBackPropagateWeightsAndBiases2(learningRate, weightsDelta, gamma)
+	for i = 1, #(self.weights) do
+		for j = 1, #(self.weights[i]) do
+			for k = 1, #(self.weights[i][j]) do
+                self.weights[i][j][k] = self.weights[i][j][k] - (weightsDelta[i][j][k] + learningRate * self.weights[i][j][k]) * learningRate
+            end
+
+            self.biases[i + 1][j] = self.biases[i + 1][j] - (gamma[i + 1][j] * self.neurons[i + 1][j]) * learningRate
+        end
+    end
+end
+
+function NeuralNetwork:calculateGradients(targetOutputs)
 	local layer = #(self.layers)
 	local targetOutput = 0
 
@@ -1884,36 +2669,14 @@ function NeuralNetwork:updateBackPropagateWeightsAndBiases2(targetOutputs, learn
 					weightsDelta[layer - 1][neuronIndex][weightIndex] = gamma[layer][neuronIndex] * self.neurons[layer - 1][weightIndex]
 				end
 			end
-
-			for weightIndex = 1, #(self.weights[layer - 1][neuronIndex]) do
-				self.weights[layer - 1][neuronIndex][weightIndex] = self.weights[layer - 1][neuronIndex][weightIndex] - weightsDelta[layer - 1][neuronIndex][weightIndex] * learningRate
-			end
-
-			self.biases[layer][neuronIndex] = self.biases[layer][neuronIndex] - (gamma[layer][neuronIndex] * self.neurons[layer][neuronIndex]) * learningRate
 		end
 
 		layer = layer - 1
 	end
 
-	-- Debugging to see if the error gets lower
-	--[[
-	if debugMode then
-		local currentTotalError = 0
-		local errors = {}
-
-		self:feedForward(self.neurons[1])
-
-		for i = 1, #(targetOutputs) do
-			errors[i] = (self.neurons[#(self.layers)][i] - targetOutputs[i])^2
-			currentTotalError = currentTotalError + errors[i]
-		end
-
-		--print(currentTotalError - totalError)
-		--print("Current: " .. currentTotalError)
-		--print("Previous: " .. totalError)
-	end
-	--]]
+	return weightsDelta, gamma
 end
+--]]
 
 function NeuralNetwork:updateBackPropagateWeightsAndBiases(targetOutputs, learningRate)
 	local layer = #(self.layers)
@@ -2206,6 +2969,50 @@ function NeuralNetwork:isEqual(neuralNetwork)
 	return equal
 end
 
+function NeuralNetwork:xavierInitialization(scale)
+	for i = 1, #(self.neurons) do
+		for j = 1, #(self.neurons[i]) do
+			self.neurons[i][j] = 0
+		end
+	end
+
+	for i = 1, #(self.biases) do
+		for j = 1, #(self.biases[i]) do
+			self.biases[i][j] = uniform(-scale, scale)
+		end
+	end
+
+	for i = 1, #(self.weights) do
+		for j = 1, #(self.weights[i]) do
+			for k = 1, #(self.weights[i][j]) do
+				self.weights[i][j][k] = uniform(-scale, scale)
+			end
+		end
+	end
+end
+
+function NeuralNetwork:heInitialization(scale)
+	for i = 1, #(self.neurons) do
+		for j = 1, #(self.neurons[i]) do
+			self.neurons[i][j] = 0
+		end
+	end
+
+	for i = 1, #(self.biases) do
+		for j = 1, #(self.biases[i]) do
+			self.biases[i][j] = normal(0, scale)
+		end
+	end
+
+	for i = 1, #(self.weights) do
+		for j = 1, #(self.weights[i]) do
+			for k = 1, #(self.weights[i][j]) do
+				self.weights[i][j][k] = normal(0, scale)
+			end
+		end
+	end
+end
+
 function NeuralNetwork:initNeurons()
 	for i = 1, #(self.layers) do
 		self.neurons[i] = {}
@@ -2351,7 +3158,7 @@ function ReplayMemory:getBatch(size)
 	local replays = {}
 
 	for i = 1, size do
-		replays[i] = self.replays[math.random(1, math.min(size * 2, self.size))]
+		replays[i] = sortedReplays[math.random(1, math.min(size * 2, self.size))]
 	end
 
 	return replays
@@ -2488,8 +3295,12 @@ runQLearningTraining()
 
 --runBackPropagationTest()
 
+--runBackPropagationTestFromReplayMemory()
+
+--runBackPropagationTestFromReplayMemoryOutputsOnly()
+
 --increaseNeuralNetwork(saveFileName, {inputScannerWidth * inputScannerHeight, 100, 100, 5})
 
 --runWorldGridCreator()
 
--- Replay memory opslaan en laden
+--runInputScannerOnly()
