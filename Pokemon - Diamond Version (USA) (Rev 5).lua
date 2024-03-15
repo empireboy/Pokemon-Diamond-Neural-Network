@@ -26,13 +26,15 @@ previousOutput = {}
 	4. Opponent Pokemon Health (binary)
 	5. Battle Screen ID (binary)
 	6. Battle Move ID (binary)
-	7. 1..6 Again for Previous Inputs (history)
+	7. Battle Button Position X (binary)
+	8. Battle Button Position Y (binary)
+	9. 1..8 Again for Previous Inputs (history)
 
 --]]
 
 neuralNetworks = {}
-neuralNetworkLayers = {(inputScannerWidth * inputScannerHeight + 1 + 10 + 10 + 10 + 9) * 2, 800, 6}
-neuralNetworkLayersBackPropagationTest = {inputScannerWidth * inputScannerHeight, 1000, 8}
+neuralNetworkLayers = {(inputScannerWidth * inputScannerHeight + 1 + 10 + 10 + 9 + 9 + 6 + 6) * 2, 80, 80, 10}
+neuralNetworkLayersBackPropagationTest = {inputScannerWidth * inputScannerHeight, 80, 80, 8}
 neuralNetworkLayersBackPropagationTestFromReplayMemory = {inputScannerWidth * inputScannerHeight, 20, 20, 4}
 neuralNetworkIndex = 1
 neuralNetworkCount = 20
@@ -96,19 +98,31 @@ isPlayerRepetitiveStuckActive = true
 isPlayerInConversation = false
 playerConversationAddress = 0x39E544
 isPlayerInBattle = false
+isPreviousPlayerInBattle = false
 playerInBattleAddress = 0x1F6484
 playerPokemonHealth = 0
-playerPokemonHealthAddress = 0x2B587C
+previousPlayerPokemonHealth = 0
+playerPokemonHealthFitnessMultiplier = 0.2
+playerPokemonHealthAddress = nil
 playerPokemonHealthMaxLength = 10
 playerPokemonOpponentHealth = 0
 previousPlayerPokemonOpponentHealth = 0
+playerPokemonOpponentHealthFitnessMultiplier = 0.2
 playerPokemonOpponentHealthAddress = 0x2B593C
 playerBattleScreenID = 0
-playerBattleScreenIDAddress = 0x26014E
-playerBattleScreenIDMaxLength = 10
+playerBattleScreenIDAddress = nil
+playerBattleScreenIDMaxLength = 9
 playerBattleMoveID = 0
-playerBattleMoveIDAddress = 0x2B5BA4
+previousPlayerBattleMoveID = 0
+playerBattleMoveIDFitnessMultiplier = 0.8
+playerBattleMoveIDAddress = nil
 playerBattleMoveIDMaxLength = 9
+playerBattleButtonPositionX = 0
+playerBattleButtonPositionXMaxLength = 6
+playerBattleButtonPositionY = 0
+playerBattleButtonPositionYMaxLength = 6
+playerBattleButtonPositionXAddress = 0x1CDF36
+playerBattleButtonPositionYAddress = 0x1CDF3A
 
 worldGrid = {}
 worldGridWidth = 1000
@@ -139,6 +153,9 @@ bestFitness = 0
 fitnessPlayerMoving = 0
 fitnessPlayerSpeed = 0
 fitnessPlayerBattle = 0
+fitnessTime = 0
+
+fitnessTimeMultiplier = 0.0001
 
 explorationExploitation = 0
 explorationExploitationIncrease = 0.01
@@ -161,7 +178,7 @@ trainingTextPositionY = 5
 trainingTextOffsetY = 20
 
 replayMemory = nil
-replayMemorySize = 1000
+replayMemorySize = 400
 replayMemorySaveFileName = "Replay Memory.txt"
 batchLearnTime = 30
 batchLearnTimer = 0
@@ -172,8 +189,8 @@ saveReplayTime = 10
 saveReplayTimer = 0
 isSaveReplayTimerActive = true
 
-bellmanDiscountFactor = 0.8
-bellmanLearningRate = 0.1
+bellmanDiscountFactor = 0.99
+bellmanLearningRate = 0.01
 
 --print(joypad.getimmediate())
 
@@ -302,24 +319,19 @@ function averageTables4D(table)
 end
 
 function binary(value, length)
-	local binaryString = ""
+    local binaryString = ""
 
-	while value > 0 do
-		local remainder = value % 2
+    for i = length - 1, 0, -1 do
+        local bitValue = 2 ^ i
+        if value >= bitValue then
+            binaryString = binaryString .. "1"
+            value = value - bitValue
+        else
+            binaryString = binaryString .. "0"
+        end
+    end
 
-		binaryString = tostring(remainder) .. binaryString
-		value = math.floor(value / 2)
-	end
-
-	if length then
-		if binaryString ~= "" then
-			binaryString = string.format("%0" .. tostring(length) .. "d", tonumber(binaryString))
-		else
-			binaryString = string.rep("0", length)
-		end
-	end
-
-	return binaryString
+    return binaryString
 end
 
 function insertBinary(toTable, binaryString)
@@ -386,8 +398,12 @@ function getJoypadTableFromOutputWithoutWalk(output)
 	elseif (maxAction == 2) then joypadTable = { Right = true, B = true }
 	elseif (maxAction == 3) then joypadTable = { Up = true, B = true }
 	elseif (maxAction == 4) then joypadTable = { Down = true, B = true  }
-	elseif (maxAction == 5) then joypadTable = { B = true  }
-	elseif (maxAction == 6) then joypadTable = { A = true  }
+	elseif (maxAction == 5) then joypadTable = { Left = true }
+	elseif (maxAction == 6) then joypadTable = { Right = true }
+	elseif (maxAction == 7) then joypadTable = { Up = true }
+	elseif (maxAction == 8) then joypadTable = { Down = true  }
+	elseif (maxAction == 9) then joypadTable = { B = true  }
+	elseif (maxAction == 10) then joypadTable = { A = true  }
 	end
 
 	return joypadTable
@@ -530,24 +546,176 @@ function isPlayerInGridRange()
 end
 
 function readFromMemory()
+	isPreviousPlayerInBattle = isPlayerInBattle
+
+	isPlayerInBattle = numberToBool(memory.read_s32_le(playerInBattleAddress))
+
+	-- Update addresses the first frame the player is in a battle
+	if isPlayerInBattle and isPreviousPlayerInBattle ~= isPlayerInBattle then
+		updateBattleAddresses()
+	end
+	
 	playerPositionX = memory.read_s32_le(playerPositionXAddress)
 	playerPositionY = memory.read_s32_le(playerPositionYAddress)
 	playerRotation = memory.read_s32_le(playerRotationAddress)
 	playerWalkingTowardsTileType = memory.read_s32_le(playerWalkingTowardsTileTypeAddress)
 	playerTileType = memory.read_s16_le(playerTileTypeAddress)
 	isPlayerInConversation = numberToBool(memory.read_s32_le(playerConversationAddress))
-	isPlayerInBattle = numberToBool(memory.read_s32_le(playerInBattleAddress))
-	playerPokemonHealth = memory.read_s32_le(playerPokemonHealthAddress)
-	playerPokemonOpponentHealth = memory.read_s32_le(playerPokemonOpponentHealthAddress)
-	playerBattleScreenID = memory.read_s16_le(playerBattleScreenIDAddress)
-	playerBattleMoveID = memory.read_s16_le(playerBattleMoveIDAddress)
+	playerBattleButtonPositionX = memory.read_s16_le(playerBattleButtonPositionXAddress)
+	playerBattleButtonPositionY = memory.read_s16_le(playerBattleButtonPositionYAddress)
+
+	if playerPokemonHealthAddress then
+		playerPokemonHealth = memory.read_s32_le(playerPokemonHealthAddress)
+	end
+
+	if playerPokemonOpponentHealthAddress then
+		playerPokemonOpponentHealth = memory.read_s32_le(playerPokemonOpponentHealthAddress)
+	end
+
+	if playerBattleScreenIDAddress then
+		playerBattleScreenID = memory.read_s16_le(playerBattleScreenIDAddress)
+	end
+
+	if playerBattleMoveIDAddress then
+		playerBattleMoveID = memory.read_s16_le(playerBattleMoveIDAddress)
+	end
+
+	-- Update previous stats the first frame the player is in a battle
+	if isPlayerInBattle and isPreviousPlayerInBattle ~= isPlayerInBattle then
+		previousPlayerPokemonHealth = playerPokemonHealth
+		previousPlayerPokemonOpponentHealth = playerPokemonOpponentHealth
+		previousPlayerBattleMoveID = playerBattleMoveID
+	end
 
 	if not isPlayerInBattle then
 		playerPokemonHealth = 0
 		playerPokemonOpponentHealth = 0
 		playerBattleScreenID = 0
 		playerBattleMoveID = 0
+		playerBattleButtonPositionX = 0
+		playerBattleButtonPositionY = 0
 	end
+end
+
+function updateAddresses()
+	updateBattleAddresses()
+end
+
+function updateBattleAddresses()
+	updateBattlePokemonAddresses()
+	updateBattleScreenIDAddress()
+end
+
+function updateBattlePokemonAddresses()
+	if not isPlayerInBattle then
+		return
+	end
+
+	local startAddress = 0x2B5700
+	local endAddress = 0x2B5AAC
+	local newAddress = nil
+	local newAddressOpponent = nil
+	local newAddressMoveID = nil
+
+	for address = startAddress, endAddress, 4 do
+		if validateBattlePokemonHealth(address) then
+			newAddress = address
+
+			newAddressOpponent = moveAddress_s32_le(address, 48)
+
+			newAddressMoveID = moveAddress_s16_le(address, 404)
+
+			break
+		end
+	end
+
+	if not newAddress then
+		print("Cannot find an address that stores the Battle Pokemon Health")
+	end
+
+	if not validateBattlePokemonHealth(newAddressOpponent) then
+		print("Cannot find an address that stores the Battle Pokemon Opponent Health")
+	end
+
+	playerPokemonHealthAddress = newAddress
+	playerPokemonOpponentHealthAddress = newAddressOpponent
+	playerBattleMoveIDAddress = newAddressMoveID
+end
+
+function updateBattleScreenIDAddress()
+	if not isPlayerInBattle then
+		return
+	end
+
+	local startAddress = 0x2600E0
+	local endAddress = 0x26024E
+	local newAddress = nil
+
+	for address = startAddress, endAddress, 2 do
+		if validateBattleScreenID(address) then
+			newAddress = address
+			break
+		end
+	end
+
+	if not newAddress then
+		print("Cannot find an address that stores the Battle Screen ID")
+	end
+
+	playerBattleScreenIDAddress = newAddress
+end
+
+function validateBattlePokemonHealth(address)
+	local value = memory.read_s32_le(address)
+
+	if value < 1 or value > 714 then
+		return false
+	end
+
+	local otherValue = memory.read_s32_le(moveAddress_s32_le(address, -1))
+
+	-- Use as mask
+	local otherValueSignBits = bit.band(otherValue, 0xFFFF0000)
+
+	-- Checks if first 4 letters are FFFF
+	if otherValueSignBits ~= 0xFFFF0000 then
+		return false
+	end
+
+	return true
+end
+
+function validateBattleScreenID(address)
+	local value = memory.read_s16_le(address)
+
+	if value < 1 or value > 500 then
+		return false
+	end
+
+	local otherValue = memory.read_s16_le(moveAddress_s16_le(address, -1))
+	local otherValue2 = memory.read_s16_le(moveAddress_s16_le(address, -2))
+
+	if otherValue ~= 0x0000 then
+		return false
+	end
+
+	if otherValue2 ~= 0x0009 then
+		return false
+	end
+
+	return true
+end
+
+function moveAddress_s32_le(address, spaces)
+	return address + 4 * spaces
+end
+
+function moveAddress_s16_le(address, spaces)
+	return address + 2 * spaces
+end
+
+function moveAddress_s8_le(address, spaces)
+	return address + spaces
 end
 
 function clamp(value, min, max)
@@ -795,6 +963,60 @@ function updatePlayerMovementFitness()
 	end
 end
 
+function updatePlayerPokemonHealthChangeFitness()
+	local playerPokemonHealthDiff = playerPokemonHealth - previousPlayerPokemonHealth
+
+	previousPlayerPokemonHealth = playerPokemonHealth
+	
+	if playerPokemonHealthDiff < 0 then
+		fitnessPlayerBattle = fitnessPlayerBattle - math.abs(playerPokemonHealthDiff) * playerPokemonHealthFitnessMultiplier
+	elseif playerPokemonHealthDiff > 0 then
+		fitnessPlayerBattle = fitnessPlayerBattle + math.abs(playerPokemonHealthDiff) * playerPokemonHealthFitnessMultiplier
+
+		if debugMode and neuralNetworkOutputType == "Policy" then
+			addCorrectAction(true)
+		end
+	end
+end
+
+function updatePlayerPokemonOpponentHealthChangeFitness()
+	local playerPokemonOpponentHealthDiff = playerPokemonOpponentHealth - previousPlayerPokemonOpponentHealth
+
+	previousPlayerPokemonOpponentHealth = playerPokemonOpponentHealth
+
+	if playerPokemonOpponentHealthDiff < 0 then
+		fitnessPlayerBattle = fitnessPlayerBattle + math.abs(playerPokemonOpponentHealthDiff) * playerPokemonOpponentHealthFitnessMultiplier
+
+		if debugMode and neuralNetworkOutputType == "Policy" then
+			addCorrectAction(true)
+		end
+	elseif playerPokemonOpponentHealthDiff > 0 then
+		fitnessPlayerBattle = fitnessPlayerBattle - math.abs(playerPokemonOpponentHealthDiff) * playerPokemonOpponentHealthFitnessMultiplier
+	end
+end
+
+function updatePlayerBattleMoveIDChangeFitness()
+	local playerBattleMoveIDDiff = playerBattleMoveID - previousPlayerBattleMoveID
+
+	previousPlayerBattleMoveID = playerBattleMoveID
+
+	if playerBattleMoveIDDiff > 0 then
+		fitnessPlayerBattle = fitnessPlayerBattle + playerBattleMoveIDFitnessMultiplier
+		
+		if debugMode and neuralNetworkOutputType == "Policy" then
+			addCorrectAction(true)
+		end
+	end
+end
+
+function updateTimeFitness()
+	fitnessTime = fitnessTime - fitnessTimeMultiplier
+end
+
+function resetTimeFitness()
+	fitnessTime = 0
+end
+
 function updateWorldGrid()
 	local gridOffsetX = 0
 	local gridOffsetY = 0
@@ -918,7 +1140,7 @@ end
 
 function updateExplorationExploitation()
 	if math.random(0, 100) >= explorationExploitation then
-		output = getRandomOutput(6)
+		output = getRandomOutput(neuralNetworkLayers[#neuralNetworkLayers])
 
 		copyTable(output, neuralNetworks[neuralNetworkIndex].neurons[#(neuralNetworks[neuralNetworkIndex].layers)])
 
@@ -932,6 +1154,28 @@ function updateExplorationExploitation()
 	end
 
 	joypadTable = getJoypadTableFromOutputWithoutWalk(output)
+end
+
+function insertInputs(inputTable)
+	table.insert(inputTable, boolToNumber(isPlayerInBattle))
+
+	local binaryString = binary(playerPokemonHealth, playerPokemonHealthMaxLength)
+	insertBinary(inputTable, binaryString)
+
+	binaryString = binary(playerPokemonOpponentHealth, playerPokemonHealthMaxLength)
+	insertBinary(inputTable, binaryString)
+
+	binaryString = binary(playerBattleScreenID, playerBattleScreenIDMaxLength)
+	insertBinary(inputTable, binaryString)
+
+	binaryString = binary(playerBattleMoveID, playerBattleMoveIDMaxLength)
+	insertBinary(inputTable, binaryString)
+
+	binaryString = binary(playerBattleButtonPositionX, playerBattleButtonPositionXMaxLength)
+	insertBinary(inputTable, binaryString)
+
+	binaryString = binary(playerBattleButtonPositionY, playerBattleButtonPositionYMaxLength)
+	insertBinary(inputTable, binaryString)
 end
 
 function trainOnBatch(batchSize)
@@ -1400,12 +1644,24 @@ function nextRunQLearning()
 
 	fitnessPlayerMoving = 0
 	fitnessPlayerSpeed = 0
+	fitnessPlayerBattle = 0
 	
 	playerRepetitiveStuckCurrentCount = 0
 
 	stuckTimer = 0
 	runTimer = 0
 	input = {}
+
+	isPlayerInBattle = false
+	playerPokemonHealth = 0
+	previousPlayerPokemonHealth = 0
+	playerPokemonOpponentHealth = 0
+	previousPlayerPokemonOpponentHealth = 0
+	playerBattleScreenID = 0
+	playerBattleMoveID = 0
+	previousPlayerBattleMoveID = 0
+	playerBattleButtonPositionX = 0
+	playerBattleButtonPositionY = 0
 
 	for i = 1, #(neuralNetworks) do
 		neuralNetworks[i].fitness = 0
@@ -1447,6 +1703,8 @@ function nextRunQLearning()
 	
 	initWorldGrid()
 	loadWorldGrid(worldGridSaveFileName)
+
+	updateAddresses()
 
 	-- Load between a random save state so that it learns multiple inputs at the same time
 	if isRandomSaveStateActive then
@@ -1491,7 +1749,17 @@ function addFitness(neuralNetwork)
 	neuralNetwork.fitness = neuralNetwork.fitness + getCurrentReward()
 end
 
+function clearFitness()
+	fitnessPlayerMoving = 0
+	fitnessPlayerSpeed = 0
+	fitnessPlayerBattle = 0
+end
+
 function getCurrentReward()
+	return fitnessPlayerMoving + fitnessPlayerSpeed + fitnessPlayerBattle + fitnessTime
+end
+
+function getCurrentRewardWithoutTimeFitness()
 	return fitnessPlayerMoving + fitnessPlayerSpeed + fitnessPlayerBattle
 end
 
@@ -1592,7 +1860,7 @@ function runTraining()
 
 	joypadControl = false
 
-	initReplayMemory();
+	initReplayMemory()
 
 	updatePlayerPreviousPosition()
 
@@ -1626,7 +1894,7 @@ function runQLearningTraining()
 
 	joypadControl = false
 
-	initReplayMemory();
+	initReplayMemory()
 
 	updatePlayerPreviousPosition()
 
@@ -1664,7 +1932,7 @@ function runBackPropagationTestFromReplayMemory()
 	gui.use_surface("client")
 	gui.clearGraphics()
 
-	initReplayMemory();
+	initReplayMemory()
 
 	initNeuralNetworksForBackPropagationTestFromReplayMemory()
 
@@ -1683,7 +1951,7 @@ function runBackPropagationTestFromReplayMemoryOutputsOnly()
 	gui.use_surface("client")
 	gui.clearGraphics()
 
-	initReplayMemory();
+	initReplayMemory()
 
 	initNeuralNetworksForBackPropagationTestFromReplayMemory()
 
@@ -1708,6 +1976,34 @@ function runInputScannerOnly()
 	loadWorldGrid(worldGridSaveFileName)
 
 	trainingLoopInputScannerOnly()
+end
+
+function runOutputTesting()
+	math.randomseed(os.clock()*1000000)
+
+	event.onexit(onExit)
+
+	console.clear()
+
+	client.SetClientExtraPadding(extraBorderWidth, 0, 0, 0)
+
+	memory.usememorydomain("Main RAM")
+
+	gui.use_surface("client")
+	gui.clearGraphics()
+
+	readFromMemory()
+
+	initWorldGrid()
+	loadWorldGrid(worldGridSaveFileName)
+
+	isDropoutActive = false
+
+	updatePlayerPreviousPosition()
+
+	initNeuralNetworksForQLearning()
+
+	outputTestingLoop()
 end
 
 function worldGridCreatorLoop()
@@ -1854,21 +2150,18 @@ function trainingLoopQLearning()
 			break
 		end
 
-		local playerPokemonOpponentHealthDiff = playerPokemonOpponentHealth - previousPlayerPokemonOpponentHealth
-
-		previousPlayerPokemonOpponentHealth = playerPokemonOpponentHealth
-
-		if playerPokemonOpponentHealthDiff < 0 then
-			fitnessPlayerBattle = fitnessPlayerBattle + math.abs(playerPokemonOpponentHealthDiff) * 0.01
-
-			if debugMode and neuralNetworkOutputType == "Policy" then
-				addCorrectAction(true)
-			end
-		else
-			fitnessPlayerBattle = fitnessPlayerBattle - math.abs(playerPokemonOpponentHealthDiff) * 0.01
-		end
+		updatePlayerPokemonHealthChangeFitness()
+		updatePlayerPokemonOpponentHealthChangeFitness()
+		updatePlayerBattleMoveIDChangeFitness()
+		updateTimeFitness()
 
 		--updateWorldGrid()
+
+		local rewardWithoutTimeFitness = getCurrentRewardWithoutTimeFitness()
+
+		if rewardWithoutTimeFitness ~= 0 then
+			resetTimeFitness()
+		end
 
 		local reward = getCurrentReward()
 
@@ -1884,26 +2177,12 @@ function trainingLoopQLearning()
 
 		addFitness(neuralNetworks[neuralNetworkIndex])
 
-		fitnessPlayerMoving = 0
-		fitnessPlayerSpeed = 0
-		fitnessPlayerBattle = 0
+		clearFitness()
 
 		input = getNeuralNetworkInputFromGrid(inputScannerWidth, inputScannerHeight)
 
-		-- Insert all different inputs
-		table.insert(input, boolToNumber(isPlayerInBattle))
-
-		local binaryString = binary(playerPokemonHealth, playerPokemonHealthMaxLength)
-		insertBinary(input, binaryString)
-
-		binaryString = binary(playerPokemonOpponentHealth, playerPokemonHealthMaxLength)
-		insertBinary(input, binaryString)
-
-		binaryString = binary(playerBattleScreenID, playerBattleScreenIDMaxLength)
-		insertBinary(input, binaryString)
-
-		binaryString = binary(playerBattleMoveID, playerBattleMoveIDMaxLength)
-		insertBinary(input, binaryString)
+		-- Insert all different inputs into the input table
+		insertInputs(input)
 
 		-- Make sure previous inputs are initialized to zero
 		if runTimer <= 0 then
@@ -1931,10 +2210,12 @@ function trainingLoopQLearning()
 			table.insert(combinedPreviousInput, previousInputHistory2[i])
 		end
 
+		--[[
 		UIDrawer.drawInputScanner(previousInputHistory, 32, 200, inputScannerHeight)
-		UIDrawer.drawInputScanner(previousInputHistory2, 160, 200, inputScannerHeight)
+		UIDrawer.drawInputScanner(previousInputHistory2, 200, 200, inputScannerHeight)
 		UIDrawer.drawInputScanner(combinedInput, 32, 260, inputScannerHeight)
 		UIDrawer.drawInputScanner(combinedPreviousInput, 32, 320, inputScannerHeight)
+		--]]
 
 		-- Setting the start input value for debugging
 		if debugMode then
@@ -1945,7 +2226,25 @@ function trainingLoopQLearning()
 			end
 		end
 
-		if not updateSaveReplayTimer() then
+		if not updateSaveReplayTimer() and reward == 0 then
+			local errorMessage = saveReplay(
+				neuralNetworks[neuralNetworkIndex],
+				neuralNetworks[neuralNetworkIndex + 1],
+				combinedInput,
+				combinedPreviousInput,
+				previousOutput,
+				reward,
+				bellmanDiscountFactor,
+				bellmanLearningRate
+			)
+
+			if errorMessage then
+				print(errorMessage)
+			end
+		end
+
+		-- Make sure to not only save random replays, but also replays with a positive or negative reward
+		if reward ~= 0 then
 			local errorMessage = saveReplay(
 				neuralNetworks[neuralNetworkIndex],
 				neuralNetworks[neuralNetworkIndex + 1],
@@ -1991,7 +2290,6 @@ function trainingLoopQLearning()
 		end
 
 		if not updateStuckTimer() then
-			--if neuralNetworkOutputType == "Random" then
 			if not isPlayerInBattle then
 				-- Add a decreased reward when stuck in a wall
 				fitnessPlayerMoving = fitnessPlayerMoving - 1
@@ -2026,10 +2324,9 @@ function trainingLoopQLearning()
 				-- Make sure that the neural network continues during a battle
 				updateExplorationExploitation()
 			end
-			--end
 		end
 
-		UIDrawer.drawTrainingUI()
+		--UIDrawer.drawTrainingUI()
 
 		emu.frameadvance()
 
@@ -2038,122 +2335,48 @@ function trainingLoopQLearning()
 end
 
 function trainingLoopBackPropagationTest()
+	local outputTables = {}
+	local inputTables = {}
+	local testDataCount = 20
+
+	for i = 1, testDataCount do
+		local t = {}
+
+		for j = 1, 8 do
+			table.insert(t, math.random() * 8 - 4)
+		end
+
+		table.insert(outputTables, t)
+	end
+
+	for i = 1, testDataCount do
+		local t = {}
+
+		for j = 1, inputScannerWidth * inputScannerHeight do
+			table.insert(t, math.random() * 8 - 4)
+		end
+
+		table.insert(inputTables, t)
+	end
+
 	while true do
 		gui.clearGraphics()
 
-		local learningRate = 0.005
+		local learningRate = 0.01
 		local totalError = 0
-
-		-- Output 1
-
-		for i = 1, inputScannerWidth * inputScannerHeight do
-			input[i] = 0
-		end
-
-		local outputTargets = {-0.5, -0.5, -0.5, -1, -1, 0, -1, -0.5}
 
 		local errors = {}
 
-		output = neuralNetworks[neuralNetworkIndex]:feedForward(input)
+		for i = 1, testDataCount do
+			output = neuralNetworks[neuralNetworkIndex]:feedForward(inputTables[i])
 
-		--print(output)
-		
-		
-		--[[
-		print(
-			"Current output: [" ..
-			tonumber(string.format("%.3f", output[1])) ..
-			"] [" ..
-			tonumber(string.format("%.3f", output[2])) ..
-			"] [" ..
-			tonumber(string.format("%.3f", output[3])) ..
-			"] [" ..
-			tonumber(string.format("%.3f", output[4])) ..
-			"] [" ..
-			tonumber(string.format("%.3f", output[5])) ..
-			"]"
-		)
-		--]]
+			for j = 1, #outputTables[i] do
+				errors[j] = (output[j] - outputTables[i][j])^2
+				totalError = totalError + errors[j]
+			end
 
-		for i = 1, #(outputTargets) do
-			errors[i] = (output[i] - outputTargets[i])^2
-			totalError = totalError + errors[i]
+			neuralNetworks[neuralNetworkIndex]:backPropagate(outputTables[i], learningRate)
 		end
-
-		neuralNetworks[neuralNetworkIndex]:backPropagate(outputTargets, learningRate)
-
-		-- Output 2
-
-		for i = 1, inputScannerWidth * inputScannerHeight do
-			input[i] = 0.2
-		end
-
-		outputTargets = {0.7, 0.1, 0.2, 0.5, 0.9, 1, 0.5, 0.9}
-
-		errors = {}
-
-		output = neuralNetworks[neuralNetworkIndex]:feedForward(input)
-		
-		--[[
-		print(
-			"Current output: [" ..
-			tonumber(string.format("%.3f", output[1])) ..
-			"] [" ..
-			tonumber(string.format("%.3f", output[2])) ..
-			"] [" ..
-			tonumber(string.format("%.3f", output[3])) ..
-			"] [" ..
-			tonumber(string.format("%.3f", output[4])) ..
-			"] [" ..
-			tonumber(string.format("%.3f", output[5])) ..
-			"]"
-		)
-		--]]
-
-		for i = 1, #(outputTargets) do
-			errors[i] = (output[i] - outputTargets[i])^2
-			totalError = totalError + errors[i]
-		end
-
-		neuralNetworks[neuralNetworkIndex]:backPropagate(outputTargets, learningRate)
-
-		-- Output 3
-
-		for i = 1, inputScannerWidth * inputScannerHeight do
-			input[i] = 1
-		end
-
-		outputTargets = {-0.2, -1, -0.2, -0.8, -0.4, -0.2, -0.5, -0.9}
-
-		errors = {}
-
-		output = neuralNetworks[neuralNetworkIndex]:feedForward(input)
-
-		for i = 1, #(outputTargets) do
-			errors[i] = (output[i] - outputTargets[i])^2
-			totalError = totalError + errors[i]
-		end
-
-		neuralNetworks[neuralNetworkIndex]:backPropagate(outputTargets, learningRate)
-
-		-- Output 4
-
-		for i = 1, inputScannerWidth * inputScannerHeight do
-			input[i] = 0.7
-		end
-
-		outputTargets = {0.1, 1, 1, 1, 0.3, 1, 1, 1}
-
-		errors = {}
-
-		output = neuralNetworks[neuralNetworkIndex]:feedForward(input)
-
-		for i = 1, #(outputTargets) do
-			errors[i] = (output[i] - outputTargets[i])^2
-			totalError = totalError + errors[i]
-		end
-
-		neuralNetworks[neuralNetworkIndex]:backPropagate(outputTargets, learningRate)
 
 		print("Total error: " .. string.format("%.10f", totalError))
 
@@ -2307,12 +2530,96 @@ function trainingLoopInputScannerOnly()
 	end
 end
 
+function outputTestingLoop()
+	while true do
+		initTrainingLoop()
+
+		if playerMovedOneStep() then
+			if isPlayerInGridRange() then
+				if worldGrid[playerPositionX][playerPositionY] == unExploredTileInput then
+					worldGrid[playerPositionX][playerPositionY] = exploredTileInput
+				end
+			end
+		end
+
+		copyTable(input, previousInput)
+
+		if not isInputEqual(input, previousInputHistory) then
+			copyTable(previousInputHistory, previousInputHistory2)
+			copyTable(input, previousInputHistory)
+		end
+
+		previousOutput = {}
+		copyTable(output, previousOutput)
+
+		input = getNeuralNetworkInputFromGrid(inputScannerWidth, inputScannerHeight)
+
+		-- Insert all different inputs into the input table
+		insertInputs(input)
+
+		-- Make sure previous inputs are initialized to zero
+		if runTimer <= 0 then
+			previousInputHistory = {}
+			previousInputHistory2 = {}
+
+			for i = 1, #input do
+				table.insert(previousInputHistory, 0)
+				table.insert(previousInputHistory2, 0)
+			end
+		end
+
+		-- Combine inputs with history of previous inputs
+		combinedInput = {}
+		combinedPreviousInput = {}
+
+		copyTable(input, combinedInput)
+		copyTable(previousInputHistory, combinedPreviousInput)
+
+		for i = 1, #previousInputHistory do
+			table.insert(combinedInput, previousInputHistory[i])
+		end
+
+		for i = 1, #previousInputHistory2 do
+			table.insert(combinedPreviousInput, previousInputHistory2[i])
+		end
+
+		copyTable(neuralNetworks[neuralNetworkIndex]:feedForward(combinedInput), output)
+		joypadTable = getJoypadTableFromOutputWithoutWalk(output)
+
+		-- If the runTimer stays at 0 it won't update things like the previous input
+		if runTimer <= 0 then
+			runTimer = runTimer + 1
+		end
+
+		gui.text(8, 130, "Predicted Action:")
+
+		local count = 1
+		for key, value in pairs(joypadTable) do
+			gui.text(8, 130 + 20 * count, tostring(key))
+
+			count = count + 1
+		end
+
+		gui.text(220, 130, "Output:")
+
+		for i = 1, #output do
+			gui.text(220, 130 + 20 * i, string.format("%.3f", output[i]))
+		end
+
+		UIDrawer.drawTrainingUI()
+
+		emu.frameadvance()
+
+		updatePlayerPreviousPosition()
+	end
+end
+
 function UIDrawer.drawTrainingUI()
 	UIDrawer.drawTrainingText(trainingTextPositionX, trainingTextPositionY, trainingTextOffsetY)
 
 	--UIDrawer.drawReplayText(neuralNetworkIndex)
 
-	--UIDrawer.drawCurrentNeuralNetwork()
+	UIDrawer.drawCurrentNeuralNetwork()
 
 	UIDrawer.drawInputScanner(input, 240, 5, inputScannerHeight)
 
@@ -2341,17 +2648,17 @@ function UIDrawer.drawNeuralNetwork(neuralNetwork, positionX, positionY)
 
 	local color, offsetX, offsetY
 
+	local rectangleWidth = 10
+	local rectangleRowCount = #(neuralNetwork.neurons)
+	local offsetX = (extraBorderWidth - (rectangleRowCount * rectangleWidth)) / (rectangleRowCount - 1)
+
 	for i = 1, #(neuralNetwork.neurons) do
 		for j = 1, #(neuralNetwork.neurons[i]) do
-			offsetX = (client.borderwidth() + extraBorderWidth) / #(neuralNetwork.neurons) / 2.1
 			offsetY = (client.screenheight() - 150) / #(neuralNetworks[neuralNetworkIndex].neurons[i])
 
 			local neuronValue = neuralNetworks[neuralNetworkIndex].neurons[i][j]
 
-			if
-				(neuronValue == exploredTileInput and i == 1) or
-				(neuronValue > 0 and i ~= 1)
-			then
+			if (neuronValue == exploredTileInput and i == 1) or (neuronValue > 0 and i ~= 1) then
 				color = getNeuralNetworkColorFromValue(neuronValue)
 			elseif neuronValue == wallInput and i == 1 then
 				color = getNeuralNetworkColorFromInput(wallInput)
@@ -2359,7 +2666,10 @@ function UIDrawer.drawNeuralNetwork(neuralNetwork, positionX, positionY)
 				color = getNeuralNetworkColorFromValue(neuronValue)
 			end
 
-			gui.drawRectangle(positionX + offsetX * (i - 1), positionY + offsetY * (j - 1), 10, 1, color, color)
+			local rectangleX = positionX + offsetX * (i - 1)
+			local rectangleY = positionY + offsetY * (j - 1)
+
+			gui.drawRectangle(rectangleX, rectangleY, rectangleWidth, 1, color, color)
 		end
 	end
 end
@@ -3291,9 +3601,9 @@ end
 -- START PROGRAM
 --runTraining()
 
-runQLearningTraining()
+--runQLearningTraining()
 
---runBackPropagationTest()
+runBackPropagationTest()
 
 --runBackPropagationTestFromReplayMemory()
 
@@ -3304,3 +3614,5 @@ runQLearningTraining()
 --runWorldGridCreator()
 
 --runInputScannerOnly()
+
+--runOutputTesting()
